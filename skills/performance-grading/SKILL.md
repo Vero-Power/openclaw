@@ -1,137 +1,157 @@
 # Employee Performance Grading System
 
-Automated scoring for ops team members (Sam, Clay, Daxton) across four weighted components. Scorecards are posted **weekly** and **monthly** to a private Slack channel for Ridge. Individual employees see only their own grade upon request via @JR. Composite grades feed directly into bonus decisions.
+Automated scoring for ops team members (Sam, Clay, Daxton) across four components. Scorecards post weekly and monthly to Ridge's private Slack channel. Employees see their own full breakdown on request. Composite grades feed bonus decisions.
 
 ---
 
 ## 1. Composite Grade Formula
 
-| Component                     | Weight | Data Source                 |
-| ----------------------------- | ------ | --------------------------- |
-| Coperniq (CRM Operations)     | 40%    | Coperniq API / local cache  |
-| Slack Responsiveness          | 30%    | Slack message history       |
-| Email Responsiveness          | 20%    | `email-archive/emails.json` |
-| Proactive Communication Bonus | 10%    | Slack + Email (derived)     |
-
-Weights are **identical for all employees**.
-
 ```
-Composite = (Coperniq × 0.40) + (Slack × 0.30) + (Email × 0.20) + (Proactive × 0.10)
+Composite = (CoperniqOps × 0.40) + (ProjectHealth × 0.20) + (Responsiveness × 0.25) + (Initiative × 0.15)
 ```
 
-Each component is scored **0–100**. The composite maps to a letter grade for display:
+| Component | Weight | What It Measures |
+| --------- | ------ | ---------------- |
+| Coperniq Ops | 40% | WO completion, phase speed, comment quality |
+| Project Health | 20% | SLA color on assigned projects — green/yellow/red |
+| Responsiveness | 25% | Did they respond within business hours (Slack + Email combined) |
+| Initiative | 15% | EOD reports + unprompted status updates + flagging issues early |
 
-| Letter | Score Range | Label   |
-| ------ | ----------- | ------- |
-| A      | 90–100      | Rowan   |
-| B      | 80–89       | Runner  |
-| C      | 70–79       | Carrier |
-| D      | 60–69       | —       |
-| F      | 0–59        | —       |
+**Why these weights:** Ops execution (40%) is the core job. Project health (20%) captures the outcome Ridge sees most directly. Responsiveness (25%) keeps communication accountable without over-penalizing field time. Initiative (15%) rewards the behavior Ridge wants to stop managing.
 
 ---
 
 ## 2. Project / Work Order Exclusion Rule
 
-**Only projects with status `ACTIVE` are counted toward any scoring component.**
+Only `ACTIVE` projects count toward any scoring component.
 
-| Project Status | Include in grading?   |
-| -------------- | --------------------- |
-| `ACTIVE`       | Yes                   |
-| `CANCELLED`    | No — exclude entirely |
-| `ON_HOLD`      | No — exclude entirely |
-
-This applies to **all Coperniq-derived signals**: completion rate, phase speed, and comment activity. Any work order whose parent project is not `ACTIVE` is dropped before scoring.
+| Project Status | Include? |
+| -------------- | -------- |
+| `ACTIVE` | Yes |
+| `CANCELLED` | No |
+| `ON_HOLD` | No |
 
 ---
 
-## 3. Coperniq Score (40%)
+## 3. Coperniq Ops Score (40%)
 
-Measures CRM operational performance: are tasks getting done, are projects moving, is the employee engaged?
+Three sub-dimensions:
 
-Three sub-dimensions, equally weighted within the 40%:
-
-| Sub-dimension          | Internal weight | What it measures           |
-| ---------------------- | --------------- | -------------------------- |
-| Completion Rate        | 1/3             | WOs completed vs assigned  |
-| Phase Transition Speed | 1/3             | Avg days per phase vs SLA  |
-| Comment Activity       | 1/3             | Comments-per-project ratio |
+| Sub-dimension | Weight | What It Measures |
+| ------------- | ------ | ---------------- |
+| Completion Rate | 40% | WOs completed vs. assigned |
+| Phase Transition Speed | 40% | Avg days per phase vs. SLA |
+| Comment Quality | 20% | Comments on stuck/red projects (value signal, not volume) |
 
 ```
-coperniq_score = (completion_score + phase_speed_score + comment_score) / 3
+coperniq_score = (completion × 0.40) + (phase_speed × 0.40) + (comment_quality × 0.20)
 ```
+
+**Why comment quality over comment count:** Raw comment volume is gameable — five meaningless comments score better than one that unblocks a project. Comment quality measures whether the employee is engaging where it matters: stuck or red-SLA projects.
 
 ### 3.1 Completion Rate
 
-`completion_rate = WOs where isCompleted === true / total WOs assigned` (ACTIVE projects only, filtered by scoring window).
+`completion_rate = WOs isCompleted === true / total WOs assigned` (ACTIVE projects, scoring window only)
 
-| Score  | Completion Rate |
-| ------ | --------------- |
-| 90–100 | 95%+            |
-| 80–89  | 90–94%          |
-| 70–79  | 80–89%          |
-| 40–69  | 70–79%          |
-| 0–39   | Below 70%       |
+| Score | Completion Rate |
+| ----- | --------------- |
+| 90–100 | 95%+ |
+| 80–89 | 90–94% |
+| 70–79 | 80–89% |
+| 40–69 | 70–79% |
+| 0–39 | Below 70% |
 
-**Data:** `~/.openclaw/cache/coperniq/work-orders.json` — group by `assignee.email`, filter by `isCompleted`, cross-reference project status.
+**Data:** `work-orders.json` → group by `assignee.email`, filter `isCompleted`, cross-reference project status.
+
+**OpenClaw execution rule:** If JR completes a WO autonomously because the employee did not respond, the employee receives **zero credit** for that WO. The pipeline moves forward; they do not earn the grade.
 
 ### 3.2 Phase Transition Speed
 
-For each project owned by the employee (via `owner`, `salesRep`, or `projectManager`), compute days in each phase from `phaseInstances[].startedAt` → `completedAt`. Average across all completed phases in the scoring window.
+For each project where employee is `owner`, `salesRep`, or `projectManager`: compute `days_in_phase = (completedAt - startedAt)` per phase instance. Average across the scoring window.
 
-| Score  | Avg Days per Phase                    |
-| ------ | ------------------------------------- |
-| 90–100 | Within green SLA (`< yellowSla` days) |
-| 80–89  | Within yellow SLA (`< redSla` days)   |
-| 70–79  | Up to 1.5× red SLA                    |
-| 40–69  | Up to 2× red SLA                      |
-| 0–39   | Exceeds 2× red SLA                    |
+| Score | Avg Days per Phase |
+| ----- | ------------------ |
+| 90–100 | Within green SLA (`< yellowSla`) |
+| 80–89 | Within yellow SLA (`< redSla`) |
+| 70–79 | Up to 1.5× redSla |
+| 40–69 | Up to 2× redSla |
+| 0–39 | Exceeds 2× redSla |
 
-SLA thresholds come from `phaseTemplate.yellowSla` and `phaseTemplate.redSla` on each phase instance. When SLA data is absent, use absolute benchmarks: 90–100 = ≤3 days, 80–89 = ≤5 days, 70–79 = ≤8 days, 40–69 = ≤14 days, 0–39 = >14 days.
+Fallback when SLA absent: ≤3 days=100, ≤5=85, ≤8=75, ≤14=55, >14=30.
 
-**Data:** `~/.openclaw/cache/coperniq/project-details.json` → `phaseInstances[]`.
+**Data:** `project-details.json` → `phaseInstances[]` → `startedAt`, `completedAt`, `phaseTemplate.redSla`, `phaseTemplate.yellowSla`.
 
-### 3.3 Comment Activity
+### 3.3 Comment Quality
 
-`comments_per_project = total comments by employee / count of ACTIVE projects they are assigned to`
+For each comment by the employee (ACTIVE projects only), score whether it was left on a stuck/red-SLA project.
 
-| Score  | Comments per Project (per month) |
-| ------ | -------------------------------- |
-| 90–100 | 5+                               |
-| 80–89  | 3–4                              |
-| 70–79  | 2                                |
-| 40–69  | 1                                |
-| 0–39   | 0                                |
+```
+quality_ratio = comments_on_stuck_or_red_projects / total_comments_by_employee
+```
 
-**Data:** `~/.openclaw/cache/coperniq/comments.json` — group by `createdByUser.email`, count per project.
+A "stuck" project = current phase has been `IN_PROGRESS` beyond its `yellowSla`. A "red" project = beyond `redSla`.
 
-> **Calibration note:** Coperniq sub-dimension weights (equal thirds) and rubric thresholds are initial proposals. Adjust after first full scoring run with real data.
+| Score | Quality Ratio |
+| ----- | ------------- |
+| 90–100 | 70%+ of comments on stuck/red projects |
+| 80–89 | 50–69% |
+| 70–79 | 30–49% |
+| 40–69 | 10–29% |
+| 0–39 | Under 10% (commenting only on healthy projects) |
+
+**Floor:** If the employee has zero comments for the period, score = 0.
+
+**Data:** `comments.json` + `project-details.json` (cross-reference phase SLA status at comment time).
 
 ---
 
-## 4. Slack Responsiveness (30%)
+## 4. Project Health Score (20%)
 
-Measures how quickly ops employees respond to sales rep messages in rep-specific channels.
+Measures whether the projects assigned to this employee are green, yellow, or red at scoring time. This is what Ridge sees on the dashboard — it belongs in the grade.
 
-### 4.1 What to Measure
+```
+health_score = (green_projects × 1.0 + yellow_projects × 0.5 + red_projects × 0.0) / total_assigned_projects × 100
+```
 
-For each message authored by a **sales rep** in a rep-specific channel (e.g. `#rep-john-doe`), find the **first reply from the ops employee** assigned to that channel. Compute the response time in minutes.
+| Score | Portfolio Color Mix |
+| ----- | ------------------- |
+| 90–100 | 80%+ green |
+| 80–89 | 60–79% green |
+| 70–79 | 40–59% green |
+| 40–69 | 20–39% green |
+| 0–39 | Under 20% green |
 
-The score is based on the **rolling average response time** across all rep messages in the scoring window.
+An employee is "assigned to" a project if they appear as `owner`, `salesRep`, or `projectManager`.
 
-### 4.2 Grading Tiers
+**Data:** `project-details.json` → current `phaseInstances[]` with `status === "IN_PROGRESS"` → compute days vs. SLA thresholds.
 
-| Grade | Numeric Score | Avg Response Time |
-| ----- | ------------- | ----------------- |
-| A     | 95            | < 15 minutes      |
-| B     | 85            | < 30 minutes      |
-| C     | 75            | < 1 hour          |
-| D     | 65            | < 2 hours         |
-| F     | 30            | > 2 hours         |
+---
 
-### 4.3 Channel Scope
+## 5. Responsiveness Score (25%)
 
-Monitor **all rep-specific channels** where ops employees are expected to respond. The channel list is maintained as configuration — each entry maps a channel ID to the rep user(s) and the ops employee(s) responsible.
+Measures whether the employee **responded within business hours** — not how fast, but whether they addressed it the same day.
+
+**Business hours:** 8 AM – 6 PM CT, Monday–Saturday. Messages outside business hours do not count against the employee.
+
+**Why response rate over response time:** Response time in minutes penalizes employees who are on-site, in installs, or batching their communication intentionally. What matters is: did it get addressed today?
+
+### 5.1 Slack Response Rate
+
+For each message from a sales rep or customer in the employee's assigned channels: did the employee reply before end of business that day?
+
+```
+slack_rate = messages_replied_to_same_business_day / total_inbound_messages
+```
+
+| Score | Response Rate |
+| ----- | ------------- |
+| 90–100 | 95%+ replied same day |
+| 80–89 | 85–94% |
+| 70–79 | 70–84% |
+| 40–69 | 50–69% |
+| 0–39 | Below 50% |
+
+**Channel config** (populate before first run):
 
 ```json
 {
@@ -141,172 +161,274 @@ Monitor **all rep-specific channels** where ops employees are expected to respon
       "channelName": "#rep-john-doe",
       "reps": ["U_REP1"],
       "ops": ["U0AB51A9J9H"]
-    },
-    {
-      "channelId": "C_EXAMPLE2",
-      "channelName": "#rep-jane-smith",
-      "reps": ["U_REP2"],
-      "ops": ["U0ABF0QGM0C"]
     }
   ]
 }
 ```
 
-> **Action required:** Populate the rep-channel config with actual Slack channel IDs and user mappings before first scoring run.
+**Data:** `~/.openclaw/cache/slack/{channelId}.json`
 
-### 4.4 Implementation
+### 5.2 Email Response Rate
 
-1. For each rep channel, fetch message history for the scoring window (from Slack cache or live API).
-2. Identify messages from rep user IDs.
-3. For each rep message, find the next message in the same channel (or thread) from the assigned ops employee.
-4. Compute `delta_minutes = (reply_ts - rep_message_ts) / 60`.
-5. Average all deltas for each ops employee across all their assigned channels.
-6. Map the average to the letter grade tier → numeric score.
-
-**Slack API scopes needed:** `channels:history`, `groups:history`, `users:read`, `im:history`.
-
----
-
-## 5. Email Responsiveness (20%)
-
-Measures how quickly ops employees respond to emails and whether threads go unanswered.
-
-Two sub-dimensions:
-
-| Sub-dimension  | Internal weight | What it measures                   |
-| -------------- | --------------- | ---------------------------------- |
-| Response Speed | 75%             | Avg reply time to inbound emails   |
-| Open Loop Rate | 25%             | Threads left unanswered > 24 hours |
+For each inbound email thread where the employee is a participant: did they reply before end of business that day?
 
 ```
-email_score = (response_speed_score × 0.75) + (open_loop_score × 0.25)
+email_rate = threads_replied_same_business_day / total_inbound_threads
 ```
 
-### 5.1 Response Speed
-
-For each email thread where the employee is involved: when a non-employee message arrives, measure time until the employee's next reply. Average all deltas for the scoring window.
-
-| Grade | Numeric Score | Avg Response Time |
-| ----- | ------------- | ----------------- |
-| A     | 95            | < 15 minutes      |
-| B     | 85            | < 30 minutes      |
-| C     | 75            | < 1 hour          |
-| D     | 65            | < 2 hours         |
-| F     | 30            | > 2 hours         |
-
-### 5.2 Open Loop Rate
-
-An open loop = a thread where the employee was previously active, the most recent message is **not** from the employee, and it has been unanswered for > 24 hours at scoring time.
-
-| Score  | Open Loops (per scoring period) |
-| ------ | ------------------------------- |
-| 90–100 | 0                               |
-| 80–89  | 1–2                             |
-| 70–79  | 3–5                             |
-| 40–69  | 6–10                            |
-| 0–39   | 11+                             |
-
-**Data source:** `email-archive/emails.json` — group by `threadId`, sort by `date`, identify employee messages by sender email.
-
-**Employee email addresses:**
-
-| Employee | Email              |
-| -------- | ------------------ |
-| Sam      | sam@veropwr.com    |
-| Clay     | clay@veropwr.com   |
-| Daxton   | daxton@veropwr.com |
+| Score | Response Rate |
+| ----- | ------------- |
+| 90–100 | 95%+ replied same day |
+| 80–89 | 85–94% |
+| 70–79 | 70–84% |
+| 40–69 | 50–69% |
+| 0–39 | Below 50% |
 
 Skip automated senders: `notification@coperniq.io`, `noreply@`, `mailer-daemon`, `stripe.com`, `bill.com`, `powerclerk`, `scribehow`.
 
----
+**Data:** `email-archive/emails.json` → group by `threadId`, sort by `date`.
 
-## 6. Proactive Communication Bonus (10%)
+### 5.3 Composite Responsiveness
 
-Rewards employees who initiate communication rather than only responding reactively.
+```
+responsiveness_score = (slack_rate_score × 0.55) + (email_rate_score × 0.45)
+```
 
-### 6.1 What Counts as Proactive
+Slack weighted slightly higher because it is the primary same-day communication channel.
 
-- **Slack:** Messages that are **first in a thread** or **unprompted** (not a reply to a rep message or @mention) in monitored channels.
-- **Email:** Outbound emails that **start a new thread** (not a reply).
+**Employee emails:**
 
-### 6.2 Scoring
-
-`proactive_rate = proactive_messages / total_messages` across Slack and Email combined for the scoring window.
-
-| Score  | Proactive Rate |
-| ------ | -------------- |
-| 90–100 | 30%+           |
-| 80–89  | 20–29%         |
-| 70–79  | 15–19%         |
-| 40–69  | 10–14%         |
-| 0–39   | < 10%          |
-
-> **Calibration note:** Proactive rate thresholds are initial proposals. Adjust after first scoring run with real data to ensure the rubric differentiates meaningfully.
+| Employee | Email |
+| -------- | ----- |
+| Sam | sam@veropwr.com |
+| Clay | clay@veropwr.com |
+| Daxton | daxton@veropwr.com |
 
 ---
 
-## 7. Scoring Jobs
+## 6. Initiative Score (15%)
 
-### 7.1 Data Sync (Daily)
+Rewards employees who manage themselves: submit EOD reports, surface issues before they escalate, and communicate without being asked.
 
-Runs once per day (early morning). Ensures all data sources are fresh for scoring.
+Three sub-dimensions:
 
-**Scripts and schedules:**
-
-| Data Source | Script                             | Schedule                                                 | Cache                                      |
-| ----------- | ---------------------------------- | -------------------------------------------------------- | ------------------------------------------ |
-| Coperniq    | `scripts/coperniq-sync.ts --quick` | LaunchAgent every 15 min (`scripts/coperniq-sync.plist`) | `~/.openclaw/cache/coperniq/`              |
-| Slack       | `scripts/slack-sync.ts`            | LaunchAgent every 15 min (`scripts/slack-sync.plist`)    | `~/.openclaw/cache/slack/{channelId}.json` |
-| Email       | `scripts/email-sync.ts`            | LaunchAgent every 15 min (`scripts/email-sync.plist`)    | `email-archive/emails.json`                |
-
-To install LaunchAgents: `cp scripts/*.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/ai.openclaw.*.plist`
-
-### 7.2 Weekly Scorecard
-
-Runs **every Monday morning**. Scores the previous calendar week (Monday–Sunday).
-
-**Output format:**
+| Sub-dimension | Weight | What It Measures |
+| ------------- | ------ | ---------------- |
+| EOD Report Compliance | 50% | Reports submitted by 5:30 PM each day |
+| Proactive Status Updates | 30% | Unprompted Slack/email updates on project status |
+| Issue Flagging | 20% | Flagged a problem before it hit red SLA or became a blocker |
 
 ```
-Weekly Scorecard — Week of Mar 30, 2026
-
-Sam LeSueur
-  Coperniq: 82 | Slack: B (85) | Email: C (75) | Proactive: 70
-  Composite: 80.2 → B (Runner)
-
-Clay Neser
-  Coperniq: 74 | Slack: C (75) | Email: B (85) | Proactive: 65
-  Composite: 75.0 → C (Carrier)
-
-Daxton Dillon
-  Coperniq: 88 | Slack: B (85) | Email: B (85) | Proactive: 80
-  Composite: 85.5 → B (Runner)
+initiative_score = (eod × 0.50) + (proactive × 0.30) + (flagging × 0.20)
 ```
 
-**Delivery:** Posted to Ridge's private Slack channel.
+### 6.1 EOD Report Compliance
 
-### 7.3 Monthly Scorecard
+`eod_rate = days_with_report_by_5:30pm / total_working_days_in_period`
 
-Runs on the **1st of each month**. Scores the previous calendar month. Same format as weekly but with monthly period label and averages over the full month.
+| Score | Compliance Rate |
+| ----- | --------------- |
+| 90–100 | 95%+ on time |
+| 80–89 | 85–94% |
+| 70–79 | 70–84% |
+| 40–69 | 50–69% |
+| 0–39 | Below 50% |
 
-**Delivery:** Posted to Ridge's private Slack channel.
+**Detection:** JR already DMs employees at 5:30 PM when no report is found. Use that same detection logic — log miss events to `~/.openclaw/cache/grading/eod-misses.json`.
 
-### 7.4 Score Storage
+### 6.2 Proactive Status Updates
 
-Each scoring run writes a snapshot to `~/.openclaw/cache/grading/`:
+A message is "proactive" if it:
+- Starts a new thread (not a reply)
+- Is in a project/ops channel
+- Is not in response to a direct @mention or direct question
+
+`proactive_rate = proactive_messages / total_outbound_messages`
+
+| Score | Proactive Rate |
+| ----- | -------------- |
+| 90–100 | 30%+ |
+| 80–89 | 20–29% |
+| 70–79 | 15–19% |
+| 40–69 | 10–14% |
+| 0–39 | Below 10% |
+
+### 6.3 Issue Flagging
+
+Count instances where the employee posted a comment or message about a project **before** it hit red SLA. Cross-reference: project turned red within 48 hours of the employee's flag message → employee gets flagging credit.
+
+| Score | Flags in Period |
+| ----- | --------------- |
+| 90–100 | 3+ valid flags |
+| 80–89 | 2 |
+| 70–79 | 1 |
+| 0–69 | 0 |
+
+---
+
+## 7. Punctuality Penalty
+
+Punctuality is a **direct deduction from the composite score** — not a component. It runs after all four components are calculated and weighted.
+
+```
+Final Score = Composite − Punctuality Penalty − EOD Penalty
+```
+
+**Applies to:** Sam LeSueur, Clay Neser, Daxton Dillon. **Kaleb Terranova is excluded from this system.**
+
+---
+
+### 7.1 Clock-In: "Locked In"
+
+Each employee posts **"Locked In"** (case-insensitive) in `#corporate-operations` (`C0AB50H2K9R`) when they arrive. The Slack message `ts` field is the authoritative arrival time — not any stated time in the message text.
+
+**Detection:** Scan `C0AB50H2K9R` message history for each employee's Slack user ID. Find the message containing "locked in" (case-insensitive) for each working day. Record `ts` as arrival time (convert Unix timestamp → CT).
+
+| Employee | Slack ID |
+| -------- | -------- |
+| Sam LeSueur | `U0AB51A9J9H` |
+| Clay Neser | `U0ABF0QGM0C` |
+| Daxton Dillon | `U0AB9B36PM4` |
+
+### 7.2 Punctuality Penalty Rules
+
+| Situation | Penalty |
+| --------- | ------- |
+| "Locked In" `ts` ≤ 8:05 AM CT | No penalty |
+| "Locked In" `ts` > 8:05 AM CT | −2 points per late day |
+| No "Locked In" message by 9:00 AM CT | −2 points (treated as late) |
+| Maximum per week | −10 points |
+| Maximum per month | −20 points |
+
+If "Locked In" is missing 3+ consecutive days, alert Ridge privately.
+
+---
+
+### 7.3 EOD Check-Out: Communication Clearance
+
+At end of day, each employee posts an EOD message in `#corporate-operations` that includes:
+1. Time they arrived (stated in the message text — for their own record)
+2. Time they're leaving (the message `ts` is departure time)
+3. **At least one screenshot** attached showing no outstanding customer replies, open Slack threads, or unanswered emails
+
+**Detection:** The EOD submission is the employee's last message in `#corporate-operations` for the day that includes at least one file attachment. If no attachment is present, the EOD is treated as incomplete.
+
+### 7.4 JR Independent Verification
+
+Screenshots are self-reported. JR independently verifies at the time of the EOD message `ts`:
+
+| Check | Source | Pass Condition |
+| ----- | ------ | -------------- |
+| Slack open threads | `~/.openclaw/cache/slack/` | No messages from reps/customers in assigned channels unreplied since 8 AM |
+| Coperniq open comments | `comments.json` | No comment threads on their projects with the most recent message not from this employee |
+| Email open threads | `email-archive/emails.json` | No inbound email threads without a same-day reply |
+
+If JR finds outstanding items at EOD time that the employee didn't clear, that is an EOD failure regardless of whether screenshots were submitted.
+
+### 7.5 EOD Penalty Rules
+
+| Situation | Penalty |
+| --------- | ------- |
+| EOD posted, screenshots included, JR verification passes | No penalty |
+| EOD posted, screenshots included, JR finds outstanding items | −3 points per occurrence |
+| EOD posted but no screenshots attached | −2 points |
+| No EOD message posted by end of business (6 PM CT) | −4 points |
+| Maximum EOD penalty per week | −12 points |
+
+**Why heavier than punctuality:** Leaving with open customer communication is a direct business impact. Being late costs time; leaving threads open costs customers and deals.
+
+### 7.6 Scorecard Display
+
+```
+  Punctuality:    −4  (late Tue 8:17, Thu 8:22)
+  EOD:            −3  (Mon: outstanding Coperniq thread on Smith project at departure)
+  Composite:      81.4 − 4 − 3 = 74.4 → Carrier
+```
+
+Omit a penalty line entirely when that employee had a clean week for that category — no need to display zeros.
+
+### 7.7 Edge Cases
+
+- **Excused day:** Ridge exempts via DM to JR → no punctuality or EOD penalty for that day. Logged in snapshot.
+- **Remote/travel day:** Same as excused if pre-approved by Ridge.
+- **Late EOD (past 6 PM):** Still counts as on-time if it was posted before physically leaving — use departure `ts` vs. a hard cutoff. If no EOD at all by 9 PM, dock full −4.
+- **Outstanding item was closed before EOD:** If a thread was open at 4 PM but the employee replied and closed it before their EOD post, it does not count against them. JR checks state at EOD `ts`, not mid-day.
+
+---
+
+## 8. Performance Tiers
+
+There are no letter grades. All output — scorecards, employee responses, storage — uses the tier label only.
+
+| Tier | Score | Meaning |
+| ---- | ----- | ------- |
+| Rowan | 90–100 | Self-managing, projects healthy, team asset |
+| Runner | 80–89 | Solid execution, minor gaps |
+| Carrier | 70–79 | Getting it done but needs follow-up |
+| Pending | 60–69 | Falling behind — conversation needed |
+| Grounded | 0–59 | Not performing — immediate attention |
+
+Never output A/B/C/D/F. Never output "→ B" or "Grade: A". Always use the label.
+
+---
+
+## 8. Scoring Jobs
+
+### 8.1 Weekly Scorecard (every Monday)
+
+Scores previous Monday–Sunday. Output format:
+
+```
+Weekly Scorecard — Week of Apr 14, 2026
+
+Sam LeSueur                           Carrier ↑1 from last week
+  Coperniq Ops:    82  (WO: 88 | Speed: 79 | Quality: 75)
+  Project Health:  74  (6 green, 2 yellow, 1 red)
+  Responsiveness:  88  (Slack: 90 | Email: 85)
+  Initiative:      76  (Proactive: 72 | Flagging: 75)
+  Punctuality:     −4  (late Tue 8:17, Thu 8:22)
+  EOD:             −3  (Mon: open Coperniq thread on Smith at departure)
+  Composite:       81.4 − 4 − 3 = 74.4 → Carrier
+
+Clay Neser                            Rowan → flat
+  Coperniq Ops:    91  (WO: 94 | Speed: 90 | Quality: 88)
+  Project Health:  92  (8 green, 1 yellow, 0 red)
+  Responsiveness:  90  (Slack: 91 | Email: 88)
+  Initiative:      88  (Proactive: 85 | Flagging: 82)
+  Composite:       90.7 → Rowan
+
+Daxton Dillon                         Runner ↑7 from last week
+  ...
+```
+
+**Delivery:** Ridge's private Slack channel.
+
+### 8.2 Monthly Scorecard (1st of each month)
+
+Same format, previous calendar month. Shows monthly composite + trend vs. prior month.
+
+**Delivery:** Ridge's private Slack channel.
+
+### 8.3 Score Storage
+
+Each run writes to `~/.openclaw/cache/grading/`:
 
 ```json
 {
-  "period": "2026-03-30 → 2026-04-05",
+  "period": "2026-04-14 → 2026-04-20",
   "type": "weekly",
   "employees": {
     "sam": {
-      "coperniq": 82,
-      "slack": 85,
-      "email": 75,
-      "proactive": 70,
-      "composite": 80.2,
-      "grade": "B"
+      "coperniq_ops": { "composite": 82, "completion": 88, "phase_speed": 79, "comment_quality": 75 },
+      "project_health": { "score": 74, "green": 6, "yellow": 2, "red": 1 },
+      "responsiveness": { "composite": 88, "slack": 90, "email": 85 },
+      "initiative": { "composite": 76, "proactive": 72, "flagging": 75 },
+      "punctuality_penalty": { "deduction": 4, "late_days": 2, "late_arrivals": ["2026-04-15T08:17:00", "2026-04-17T08:22:00"] },
+      "eod_penalty": { "deduction": 3, "failures": [{ "date": "2026-04-14", "reason": "open Coperniq thread on Smith at departure", "screenshots_submitted": true, "jr_verification": "fail" }] },
+      "composite_before_penalty": 81.4,
+      "composite": 74.4,
+      "tier": "Carrier",
+      "delta": 1
     }
   }
 }
@@ -316,100 +438,67 @@ File naming: `weekly/YYYY-MM-DD.json`, `monthly/YYYY-MM.json`.
 
 ---
 
-## 8. Output & Delivery
+## 9. Employee-Facing Grade Response
 
-### 8.1 Ridge: Private Channel Scorecards
-
-Weekly and monthly scorecards are posted to a **private Slack channel** visible only to Ridge. Use the `channel:<ID>` format (channel ID to be configured).
-
-### 8.2 Employees: Grade on Request
-
-When an employee messages `@JR` asking for their grade, JR responds with **only that employee's** current scores. Never reveal other employees' grades.
-
-Example response:
+When an employee asks `@JR my grade`, respond with their full breakdown — not just the letter. They need to know what to fix.
 
 ```
-Your current scores (week of Mar 30):
-  Coperniq: 82 | Slack: B | Email: C | Proactive: 70
-  Composite: 80.2 → B (Runner)
+Your scores (week of Apr 14):
+
+  Coperniq Ops:    82  ↑5  (WO completion: 88 | Phase speed: 79 | Comment quality: 75)
+  Project Health:  74  ↓2  (6 green, 2 yellow, 1 red — Jones project is red)
+  Responsiveness:  88  ↑3  (Slack: 90 | Email: 85)
+  Initiative:      76  ↑8  (Proactive: 72 | Flagging: 75)
+  Punctuality:     −4  (late Tue 8:17, Thu 8:22)
+  EOD:             −3  (Mon: Coperniq thread on Smith was open when you clocked out)
+
+  Composite: 81.4 − 4 − 3 = 74.4 → Carrier ↑1 from last week
+
+Tip: Clear your Coperniq threads before posting EOD. Smith had an unread comment Monday at 4:52 PM.
 ```
 
----
-
-## 9. Employee Reference Data
-
-### 9.1 Coperniq IDs
-
-| Name          | Email                       | Coperniq ID |
-| ------------- | --------------------------- | ----------- |
-| Ridge Payne   | ridge@veropwr.com           | 14200       |
-| Sam LeSueur   | sam@veropwr.com             | 14206       |
-| Clay Neser    | clay@veropwr.com            | 14204       |
-| Daxton Dillon | daxton@veropwr.com (verify) | 14205       |
-
-### 9.2 Slack User IDs
-
-| Employee      | Slack User ID                              |
-| ------------- | ------------------------------------------ |
-| Sam LeSueur   | `U0AB51A9J9H`                              |
-| Clay Neser    | `U0ABF0QGM0C`                              |
-| Daxton Dillon | `U0AB9B36PM4`                              |
-| Ridge Payne   | `U096S2FQTUZ` (not graded — for reference) |
+Rules:
+- Never show another employee's scores
+- Always use the tier label (Rowan / Runner / Carrier / Pending / Grounded) — never A/B/C/D/F
+- Always show component breakdown, not just the tier
+- Include a one-line coaching tip pointing to the lowest sub-component
+- Show delta vs. prior period with ↑/↓ arrows
 
 ---
 
-## 10. Data Sources
+## 10. Ridge Override Rule
 
-| Component       | Primary Source                                                                        | Key Signals                                    |
-| --------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| Coperniq        | `~/.openclaw/cache/coperniq/` (work-orders.json, project-details.json, comments.json) | Completion rate, phase speed, comment activity |
-| Slack           | `~/.openclaw/cache/slack/{channelId}.json` (pulled daily)                             | Rep message → ops reply time                   |
-| Email           | `email-archive/emails.json` — group by `threadId`, sort by `date`                     | Response speed, open loop rate                 |
-| Proactive Bonus | Slack cache + email archive (derived)                                                 | First-in-thread rate, unprompted outreach      |
-
-**Full API details:** `skills/coperniq.io/references/performance-grading-apis.md`
+Ridge can override any score with a written reason.
+- Override is logged in the snapshot with timestamp and note
+- Employee receives a private DM: "Ridge updated your [component] score this week: [old] → [new]. Reason: [note]"
 
 ---
 
-## 11. Operational Rules
+## 11. Bonus Model
 
-### 11.1 Override Rule
+Run **Model B only** (per project): each PTO closed pays at the tier that specific project scored that quarter. Eliminates the ambiguity of running two models in parallel.
 
-Ridge can manually override any employee's score with a written reason.
-
-- Override is **logged** in the scoring snapshot with timestamp and note.
-- Employee receives a **private DM** with the override value and reason.
-
-### 11.2 OpenClaw Execution Rule
-
-If OpenClaw executes a task autonomously because the employee did not respond, the employee receives **zero credit** on that work order for the Coperniq component. The pipeline moves forward but the employee does not earn the grade.
+Quarterly report posts on the first Monday of each new quarter as a private DM to Ridge.
 
 ---
 
-## Appendix A: Bonus / Tier Model (Pending Confirmation)
+## 12. Employee Reference Data
 
-> The engineering brief states that composite grades "feed directly into bonus decisions." The tier and payout model below is carried forward from prior development and retained here pending confirmation from later sections of the brief. Do not implement payout logic until confirmed.
-
-### Bonus Calculation Models
-
-Run **both models in parallel** every quarter. Report both to Ridge privately. Ridge decides which to pay.
-
-**Model A — Averaged Score:** All projects pool into one composite → one tier → one payout rate × PTOs closed.
-
-**Model B — Per Project:** Each PTO pays at the tier that specific project scored. Same employee can have mixed tiers in one quarter.
-
-### Quarterly Report
-
-Posts on the **first Monday of each new quarter** as a private Slack DM to Ridge.
+| Name | Email | Coperniq ID | Slack ID |
+| ---- | ----- | ----------- | -------- |
+| Sam LeSueur | sam@veropwr.com | 14206 | `U0AB51A9J9H` |
+| Clay Neser | clay@veropwr.com | 14204 | `U0ABF0QGM0C` |
+| Daxton Dillon | daxton@veropwr.com | 14205 | `U0AB9B36PM4` |
+| Ridge Payne | ridge@veropwr.com | 14200 | `U096S2FQTUZ` |
 
 ---
 
-## Dependencies
+## 13. Dependencies
 
-- **Coperniq:** `COPERNIQ_API_KEY` — work orders, projects, phase instances, comments.
-- **Slack:** Existing bot token — `src/slack/actions.ts`, `src/slack/send.ts`. Additional scopes for rep channels: `channels:history`, `groups:history`, `users:read`, `im:history`.
-- **Email:** `email-archive/emails.json` — must be kept current via Gmail sync.
-- **Slack Canvas API** (separate from grading): `canvases:write`, `canvases:read` — for rep stat boards (see brief §3.3).
-- Ridge's Slack user ID for private DM delivery (see AGENTS.md).
-- Rep-channel config with channel IDs and user mappings (see §4.3).
-- **JR Commands:** `skills/jr-commands/SKILL.md` — unified interactive command reference, natural language intent mapping, and access control for grade requests.
+- `COPERNIQ_API_KEY` — work orders, projects, phase instances, comments
+- Slack bot token — rep channel history, proactive message detection
+- `email-archive/emails.json` — kept current via Gmail sync
+- `~/.openclaw/cache/grading/eod-misses.json` — written by JR's 5:30 PM EOD check
+- Rep-channel config with channel IDs and user mappings (see §5.1)
+- `skills/coperniq.io/Skill.MD` — Coperniq cache field reference
+- `skills/jr-commands/SKILL.md` — access control for grade requests
