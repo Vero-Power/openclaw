@@ -40,40 +40,44 @@ vi.mock("./net.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./client.js", () => ({
-  describeGatewayCloseCode: (code: number) => {
-    if (code === 1000) {
-      return "normal closure";
-    }
-    if (code === 1006) {
-      return "abnormal closure (no close frame)";
-    }
-    return undefined;
-  },
-  GatewayClient: class {
-    constructor(opts: {
-      url?: string;
-      token?: string;
-      password?: string;
-      scopes?: string[];
-      onHelloOk?: () => void | Promise<void>;
-      onClose?: (code: number, reason: string) => void;
-    }) {
-      lastClientOptions = opts;
-    }
-    async request() {
-      return { ok: true };
-    }
-    start() {
-      if (startMode === "hello") {
-        void lastClientOptions?.onHelloOk?.();
-      } else if (startMode === "close") {
-        lastClientOptions?.onClose?.(closeCode, closeReason);
+vi.mock("./client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client.js")>();
+  return {
+    ...actual,
+    describeGatewayCloseCode: (code: number) => {
+      if (code === 1000) {
+        return "normal closure";
       }
-    }
-    stop() {}
-  },
-}));
+      if (code === 1006) {
+        return "abnormal closure (no close frame)";
+      }
+      return undefined;
+    },
+    GatewayClient: class {
+      constructor(opts: {
+        url?: string;
+        token?: string;
+        password?: string;
+        scopes?: string[];
+        onHelloOk?: () => void | Promise<void>;
+        onClose?: (code: number, reason: string) => void;
+      }) {
+        lastClientOptions = opts;
+      }
+      async request() {
+        return { ok: true };
+      }
+      start() {
+        if (startMode === "hello") {
+          void lastClientOptions?.onHelloOk?.();
+        } else if (startMode === "close") {
+          lastClientOptions?.onClose?.(closeCode, closeReason);
+        }
+      }
+      stop() {}
+    },
+  };
+});
 
 const { buildGatewayConnectionDetails, callGateway, callGatewayCli, callGatewayScoped } =
   await import("./call.js");
@@ -366,6 +370,34 @@ describe("callGateway error details", () => {
     expect(err?.message).toContain("Gateway target: ws://127.0.0.1:18789");
     expect(err?.message).toContain("Source: local loopback");
     expect(err?.message).toContain("Bind: loopback");
+  });
+
+  it("emits prescriptive guidance for 1008 pairing required closes", async () => {
+    startMode = "close";
+    closeCode = 1008;
+    closeReason = "pairing required";
+    setLocalLoopbackGatewayConfig();
+
+    let err: Error | null = null;
+    try {
+      await callGateway({ method: "health" });
+    } catch (caught) {
+      err = caught as Error;
+    }
+
+    const message = err?.message ?? "";
+    // Anchor message: still identifies 1008 + the original reason verbatim.
+    expect(message).toContain("gateway closed (1008 policy violation): pairing required");
+    // Diagnoses correctly: this is auth, not a process/port issue.
+    expect(message).toContain("authentication/pairing error");
+    expect(message).toMatch(/NOT a stuck process/i);
+    // Steers callers (humans + LLMs) to the right remediation.
+    expect(message).toContain("openclaw devices list");
+    expect(message).toContain("openclaw devices approve");
+    // Steers callers AWAY from the wrong remediation that JR was suggesting.
+    expect(message).toMatch(/Do NOT run `openclaw gateway restart`/);
+    // Connection details footer is preserved.
+    expect(message).toContain("Gateway target: ws://127.0.0.1:18789");
   });
 
   it("includes connection details on timeout", async () => {

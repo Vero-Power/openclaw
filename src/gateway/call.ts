@@ -15,7 +15,11 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../utils/message-channel.js";
-import { GatewayClient } from "./client.js";
+import {
+  GatewayClient,
+  formatGatewayPairingRequiredError,
+  isPairingRequiredCloseReason,
+} from "./client.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
   resolveLeastPrivilegeOperatorScopesForMethod,
@@ -307,6 +311,9 @@ function formatGatewayCloseError(
   connectionDetails: GatewayConnectionDetails,
 ): string {
   const reasonText = reason?.trim() || "no close reason";
+  if (code === 1008 && isPairingRequiredCloseReason(reasonText)) {
+    return `${formatGatewayPairingRequiredError(reasonText)}\n${connectionDetails.message}`;
+  }
   const hint =
     code === 1006 ? "abnormal closure (no close frame)" : code === 1000 ? "normal closure" : "";
   const suffix = hint ? ` ${hint}` : "";
