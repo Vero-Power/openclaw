@@ -16,7 +16,7 @@ echo "  [2/3] Slack sync..."
 echo "  [3/3] Email sync..."
 /opt/homebrew/bin/pnpm exec tsx scripts/email-sync.ts
 
-echo "  [4/4] Building morning report brief..."
-/opt/homebrew/bin/pnpm exec tsx scripts/morning-report-data.ts
+# echo "  [4/4] Building morning report brief..."
+# /opt/homebrew/bin/pnpm exec tsx scripts/morning-report-data.ts
 
 echo "=== Pre-sync complete ==="
