@@ -1,6 +1,268 @@
 {
   "messages": [
     {
+      "id": "19e6f066fbfbaf10",
+      "threadId": "19e6f066ac97065f",
+      "date": "2026-05-28 08:39",
+      "from": "\"Vero | Notifications\" <notifications@notifications.coperniq.io>",
+      "subject": "Manhal Naji | Mentioned in a comment",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6f066ac97065f",
+      "threadId": "19e6f066ac97065f",
+      "date": "2026-05-28 08:39",
+      "from": "\"Vero | Notifications\" <notifications@notifications.coperniq.io>",
+      "subject": "Manhal Naji | Mentioned in a comment",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6f06532948996",
+      "threadId": "19e6f06503d90096",
+      "date": "2026-05-28 08:39",
+      "from": "\"Vero | Notifications\" <notifications@notifications.coperniq.io>",
+      "subject": "Bobby Dickerson | Mentioned in a comment",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6f06503d90096",
+      "threadId": "19e6f06503d90096",
+      "date": "2026-05-28 08:39",
+      "from": "\"Vero | Notifications\" <notifications@notifications.coperniq.io>",
+      "subject": "Bobby Dickerson | Mentioned in a comment",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6f0198e3bc98b",
+      "threadId": "19e6f0198e3bc98b",
+      "date": "2026-05-28 08:33",
+      "from": "Proposal Ready <noreply@gosolo.io>",
+      "subject": "Your Proposal is Ready",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6effe0f3a3a62",
+      "threadId": "19e64a71a64d9dd1",
+      "date": "2026-05-28 08:31",
+      "from": "Catherine Wimberley <catherine@luminate.solar>",
+      "subject": "Re: Sean Thorps",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6efa9cec9ba76",
+      "threadId": "19e64a71a64d9dd1",
+      "date": "2026-05-28 08:26",
+      "from": "Clay Neser <clay@veropwr.com>",
+      "subject": "Re: Sean Thorps",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6ef685b4425ed",
+      "threadId": "19e6ef679f764382",
+      "date": "2026-05-28 08:21",
+      "from": "\"Vero | Notifications\" <notifications@notifications.coperniq.io>",
+      "subject": "SEAN THORPS | New SMS received",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6ef68470a905f",
+      "threadId": "19e6ef679f764382",
+      "date": "2026-05-28 08:21",
+      "from": "\"Vero | Notifications\" <notifications@notifications.coperniq.io>",
+      "subject": "SEAN THORPS | New SMS received",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6ef67b6a58661",
+      "threadId": "19e6ef679f764382",
+      "date": "2026-05-28 08:21",
+      "from": "\"Vero | Notifications\" <notifications@notifications.coperniq.io>",
+      "subject": "SEAN THORPS | New SMS received",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6ef67b0bef70f",
+      "threadId": "19e6ef679f764382",
+      "date": "2026-05-28 08:21",
+      "from": "\"Vero | Notifications\" <notifications@notifications.coperniq.io>",
+      "subject": "SEAN THORPS | New SMS received",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6ef67a2a72a6d",
+      "threadId": "19e6ef679f764382",
+      "date": "2026-05-28 08:21",
+      "from": "\"Vero | Notifications\" <notifications@notifications.coperniq.io>",
+      "subject": "SEAN THORPS | New SMS received",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6ef679f764382",
+      "threadId": "19e6ef679f764382",
+      "date": "2026-05-28 08:21",
+      "from": "\"Vero | Notifications\" <notifications@notifications.coperniq.io>",
+      "subject": "SEAN THORPS | New SMS received",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6ee3a8969d1ed",
+      "threadId": "19e6ee3a8969d1ed",
+      "date": "2026-05-28 08:01",
+      "from": "Greentech Houston <customerservice.houston@greentechrenewables.com>",
+      "subject": "Your Invoice From Greentech Houston is Attached",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6ea8cfb5b7ffe",
+      "threadId": "19e6ea8cfb5b7ffe",
+      "date": "2026-05-28 06:56",
+      "from": "CenterPointEnergy_NOREPLY@anbetrack.com",
+      "subject": "Changes to Application for DG Interconnection - VP-77",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6e928037718f5",
+      "threadId": "19e6e928037718f5",
+      "date": "2026-05-28 06:32",
+      "from": "Envato <news@m.elements.envato.com>",
+      "subject": "14 iconic World Cup kits + an AI film festival to watch",
+      "labels": [
+        "CATEGORY_PROMOTIONS",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6e8b31688bdd4",
+      "threadId": "19e6e8b31688bdd4",
+      "date": "2026-05-28 06:24",
+      "from": "Kenneth Carrell <defense21@yahoo.com>",
+      "subject": "documents",
+      "labels": [
+        "CATEGORY_PERSONAL",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6e774856112a8",
+      "threadId": "19e6e76ca5a10c32",
+      "date": "2026-05-28 06:02",
+      "from": "BILL <account-services@inform.bill.com>",
+      "subject": "Vero Statement Ready",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6e77428454668",
+      "threadId": "19e6e76ca5a10c32",
+      "date": "2026-05-28 06:02",
+      "from": "BILL <account-services@inform.bill.com>",
+      "subject": "Vero Statement Ready",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6e76ca5a10c32",
+      "threadId": "19e6e76ca5a10c32",
+      "date": "2026-05-28 06:02",
+      "from": "BILL <account-services@inform.bill.com>",
+      "subject": "Vero Statement Ready",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6e4eee92224e7",
+      "threadId": "19e6e4eee92224e7",
+      "date": "2026-05-28 05:18",
+      "from": "DoNotReplyHOTX@avolvecloud.com",
+      "subject": "26040758-ProjectDox Applicant Resubmit Request Task Assignment",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES",
+        "INBOX"
+      ]
+    },
+    {
+      "id": "19e6c64405814e67",
+      "threadId": "19e6c64405814e67",
+      "date": "2026-05-27 20:22",
+      "from": "Meta for Business <advertise-noreply@global.metamail.com>",
+      "subject": "Learn how to bid more on your priority audiences",
+      "labels": [
+        "UNREAD",
+        "CATEGORY_UPDATES",
+        "INBOX"
+      ]
+    },
+    {
       "id": "19e6c34912cb9361",
       "threadId": "19e6a2d014dbd22e",
       "date": "2026-05-27 19:30",
@@ -85286,462 +85548,7 @@
         "CATEGORY_PERSONAL",
         "INBOX"
       ]
-    },
-    {
-      "id": "19dd48756e91ad2d",
-      "threadId": "19dd41e9083a8bf2",
-      "date": "2026-04-28 08:38",
-      "from": "Coperniq Automation <notification@coperniq.io>",
-      "subject": "Lonnie Reed | New SMS received",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_PERSONAL",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd480c0dfc8470",
-      "threadId": "19dd480b99873dc7",
-      "date": "2026-04-28 08:31",
-      "from": "Junrey Sullano <notification@coperniq.io>",
-      "subject": "Lakitha Watts | Mentioned in a comment",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_PERSONAL",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd480b99873dc7",
-      "threadId": "19dd480b99873dc7",
-      "date": "2026-04-28 08:31",
-      "from": "Junrey Sullano <notification@coperniq.io>",
-      "subject": "Lakitha Watts | Mentioned in a comment",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd48090475892d",
-      "threadId": "19dd41e9083a8bf2",
-      "date": "2026-04-28 08:31",
-      "from": "Coperniq Automation <notification@coperniq.io>",
-      "subject": "Lonnie Reed | New SMS received",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_PERSONAL",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd4808f36425ab",
-      "threadId": "19dd41e9083a8bf2",
-      "date": "2026-04-28 08:31",
-      "from": "Coperniq Automation <notification@coperniq.io>",
-      "subject": "Lonnie Reed | New SMS received",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_PERSONAL",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd47edb961b03b",
-      "threadId": "19d55309e6fe8bbc",
-      "date": "2026-04-28 08:29",
-      "from": "Clay Neser <clay@veropwr.com>",
-      "subject": "Re: Couzette Guy Solar Materials",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_PERSONAL",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd47e0f3058193",
-      "threadId": "19dd47e0f3058193",
-      "date": "2026-04-28 08:28",
-      "from": "CenterPointEnergy_NOREPLY@anbetrack.com",
-      "subject": "Changes to Application for DG Interconnection - VP-18",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd47bd40240531",
-      "threadId": "19d26670d9ac4c5b",
-      "date": "2026-04-28 08:26",
-      "from": "Clay Neser <clay@veropwr.com>",
-      "subject": "Re: Engineering Request - Prince Bailey",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_PERSONAL",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd47bb9bf5aa09",
-      "threadId": "19d64829d37026df",
-      "date": "2026-04-28 08:25",
-      "from": "Sam LeSueur <sam@veropwr.com>",
-      "subject": "Re: Vero NTP Stipulation: Tammy Aljoe",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_PERSONAL",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd477aa715b12c",
-      "threadId": "19dd477aa715b12c",
-      "date": "2026-04-28 08:21",
-      "from": "\"RightSignature.com\" <documents@rightsignature.com>",
-      "subject": "Thank you for signing 'Tariff Application'",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd4762879ec46e",
-      "threadId": "19dd4762879ec46e",
-      "date": "2026-04-28 08:20",
-      "from": "\"RightSignature.com\" <documents@rightsignature.com>",
-      "subject": "CenterPoint DER Application has sent you the document 'Tariff Application' to sign",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd46f851d58b07",
-      "threadId": "19dd46f851d58b07",
-      "date": "2026-04-28 08:12",
-      "from": "duraxis.management@gmail.com",
-      "subject": "⚡ Vyke Daily Digest — Tuesday, April 28",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_PERSONAL",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd46b78ad92b25",
-      "threadId": "19dd46b78ad92b25",
-      "date": "2026-04-28 08:08",
-      "from": "API API User - Daxton Dillon <notification@coperniq.io>",
-      "subject": "James Beatty | Mentioned in a comment",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd46a07eb67b19",
-      "threadId": "19dd46a07eb67b19",
-      "date": "2026-04-28 08:06",
-      "from": "API API User - Daxton Dillon <notification@coperniq.io>",
-      "subject": "Stevie Ray Perez | Mentioned in a comment",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd4650b3dfdeef",
-      "threadId": "19dd4650b3dfdeef",
-      "date": "2026-04-28 08:00",
-      "from": "Podium <notifications@podium.com>",
-      "subject": "Podium Daily Digest (APRIL 27, 2026)",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd4600f0c7aefb",
-      "threadId": "19dcfc4745561778",
-      "date": "2026-04-28 07:55",
-      "from": "accounting vero <accounting@veropwr.com>",
-      "subject": "Re: Customer Incentive: Arshmaina Rehman",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_PERSONAL",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd440cd773af91",
-      "threadId": "19dd440cd773af91",
-      "date": "2026-04-28 07:21",
-      "from": "Colton T Christensen <colton.christensen@greentechrenewables.com>",
-      "subject": "FW: Vero Group LLC - Daily",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_PERSONAL",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd43e43d6a97c8",
-      "threadId": "19dc0a068807e98b",
-      "date": "2026-04-28 07:18",
-      "from": "Jaiden Waggoner <jaiden@luminate.solar>",
-      "subject": "Re: Cornell Stallworth Invoice",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_PERSONAL",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd433721249e24",
-      "threadId": "19cfccbf5f8862a9",
-      "date": "2026-04-28 07:07",
-      "from": "Shared Acct - 3273 Sales <sales.houston@greentechrenewables.com>",
-      "subject": "Re: Mary Fassy Solar Materials",
-      "labels": [
-        "CATEGORY_PERSONAL",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd42e30eccaf1e",
-      "threadId": "19dd42e30eccaf1e",
-      "date": "2026-04-28 07:01",
-      "from": "\"Adnan A.\" <advertise-noreply@global.metamail.com>",
-      "subject": "Get Reels performance tips for client pitches",
-      "labels": [
-        "CATEGORY_PROMOTIONS",
-        "UNREAD",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd41e94bc501ee",
-      "threadId": "19dd41e9083a8bf2",
-      "date": "2026-04-28 06:44",
-      "from": "Coperniq Automation <notification@coperniq.io>",
-      "subject": "Lonnie Reed | New SMS received",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd41e935a0bb69",
-      "threadId": "19dd41e9083a8bf2",
-      "date": "2026-04-28 06:44",
-      "from": "Coperniq Automation <notification@coperniq.io>",
-      "subject": "Lonnie Reed | New SMS received",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd41e9278bd535",
-      "threadId": "19dd41e9083a8bf2",
-      "date": "2026-04-28 06:44",
-      "from": "Coperniq Automation <notification@coperniq.io>",
-      "subject": "Lonnie Reed | New SMS received",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd41e926fd9791",
-      "threadId": "19dd41e9083a8bf2",
-      "date": "2026-04-28 06:44",
-      "from": "Coperniq Automation <notification@coperniq.io>",
-      "subject": "Lonnie Reed | New SMS received",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd41e9083a8bf2",
-      "threadId": "19dd41e9083a8bf2",
-      "date": "2026-04-28 06:44",
-      "from": "Coperniq Automation <notification@coperniq.io>",
-      "subject": "Lonnie Reed | New SMS received",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd41e900e8e0b5",
-      "threadId": "19dd41e9083a8bf2",
-      "date": "2026-04-28 06:44",
-      "from": "Coperniq Automation <notification@coperniq.io>",
-      "subject": "Lonnie Reed | New SMS received",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd3fa2114999ad",
-      "threadId": "19dd3f9987e49d65",
-      "date": "2026-04-28 06:04",
-      "from": "BILL <account-services@inform.bill.com>",
-      "subject": "Vero Statement Ready",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd3f9a2a25f036",
-      "threadId": "19dd3f9987e49d65",
-      "date": "2026-04-28 06:04",
-      "from": "BILL <account-services@inform.bill.com>",
-      "subject": "Vero Statement Ready",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd3f9987e49d65",
-      "threadId": "19dd3f9987e49d65",
-      "date": "2026-04-28 06:04",
-      "from": "BILL <account-services@inform.bill.com>",
-      "subject": "Vero Statement Ready",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd3dbbe21cc750",
-      "threadId": "19dd3dbbe21cc750",
-      "date": "2026-04-28 05:30",
-      "from": "PowerClerk Notifications <DoNotReply@powerclerk.com>",
-      "subject": "Signed Interconnection Agreement received for INT-10822",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd3db5ddfe0904",
-      "threadId": "19dd3db5ddfe0904",
-      "date": "2026-04-28 05:30",
-      "from": "PowerClerk Notifications <DoNotReply@powerclerk.com>",
-      "subject": "INT-10822 Submit the Notice of Installation Form/Letter of No Objection",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd3daf54930e97",
-      "threadId": "19dd3daf54930e97",
-      "date": "2026-04-28 05:30",
-      "from": "PowerClerk Notifications <DoNotReply@powerclerk.com>",
-      "subject": "INT-10824 Submit the Notice of Installation Form/Letter of No Objection",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd3daf49d4fe8f",
-      "threadId": "19dd3daf49d4fe8f",
-      "date": "2026-04-28 05:30",
-      "from": "PowerClerk Notifications <DoNotReply@powerclerk.com>",
-      "subject": "Signed Interconnection Agreement received for INT-10824",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd34e7daa4d1fb",
-      "threadId": "19dd34e7daa4d1fb",
-      "date": "2026-04-28 02:57",
-      "from": "Envato <news@m.elements.envato.com>",
-      "subject": "OpenAI GPT Image 2 now on Envato + the font behind Nike",
-      "labels": [
-        "CATEGORY_PROMOTIONS",
-        "UNREAD",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd2bde60d5e29d",
-      "threadId": "19dd2bde60d5e29d",
-      "date": "2026-04-28 00:18",
-      "from": "Ridge Payne <ridge@21payne.com>",
-      "subject": "Fw: Your Cougar Club Benefits Are Expiring",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_PERSONAL",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd2b587381d147",
-      "threadId": "19dd2b587381d147",
-      "date": "2026-04-28 00:10",
-      "from": "Team DigitalOcean <team@info.digitalocean.com>",
-      "subject": "[Getting started on DO] Part 1 of 4: Launch, Configure, and Secure Your Virtual Machine",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd1f055d0b8e4b",
-      "threadId": "19d88d618a9f07de",
-      "date": "2026-04-27 20:34",
-      "from": "Ridge Payne <ridge@veropwr.com>",
-      "subject": "Re: Engineering",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_PERSONAL",
-        "INBOX"
-      ]
-    },
-    {
-      "id": "19dd21ddca298b06",
-      "threadId": "19dd21ddca298b06",
-      "date": "2026-04-26 19:47",
-      "from": "Google <no-reply@accounts.google.com>",
-      "subject": "Critical security alert",
-      "labels": [
-        "UNREAD",
-        "CATEGORY_UPDATES",
-        "INBOX"
-      ]
     }
   ],
-  "lastSyncAt": "2026-05-28T02:23:30.187Z"
+  "lastSyncAt": "2026-05-28T14:42:23.772Z"
 }
