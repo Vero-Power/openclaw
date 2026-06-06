@@ -1,10 +1,12 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { danger } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
+import { slackMessageGate } from "../../../triage/gate.js";
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMessageHandler } from "../message-handler.js";
+import { runTriagePipeline, handleThreadReplyForActiveTriage } from "../triage-bridge.js";
 import type {
   SlackMessageChangedEvent,
   SlackMessageDeletedEvent,
@@ -88,6 +90,24 @@ export function registerSlackMessageEvents(params: {
           sessionKey: target.sessionKey,
           contextKey: `slack:thread:broadcast:${channelId ?? "unknown"}:${messageId ?? "unknown"}`,
         });
+        return;
+      }
+
+      // TODO(Task 6): triage gate — guarded by OPENCLAW_TRIAGE_REIMPL=1 feature flag
+      if (message.thread_ts && message.thread_ts !== message.ts) {
+        // Thread reply: check for active triage approval signal first
+        await handleThreadReplyForActiveTriage(message, ctx);
+      }
+      const gateResult = slackMessageGate({
+        user: message.user ?? "",
+        bot_id: message.bot_id,
+        channel: message.channel,
+        text: message.text ?? "",
+        jr_user_id: ctx.botUserId,
+        allowed_channels: ["*"],
+      });
+      if (gateResult.eligible) {
+        await runTriagePipeline(message, ctx);
         return;
       }
 
