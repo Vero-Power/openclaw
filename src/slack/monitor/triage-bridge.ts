@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { completeSimple, getEnvApiKey, getModel, type TextContent } from "@mariozechner/pi-ai";
 import {
   Classifier,
   Planner,
@@ -14,10 +15,36 @@ import type { Plan } from "../../triage/types.js";
 import type { SlackMessageEvent } from "../types.js";
 import type { SlackMonitorContext } from "./context.js";
 
-// TODO(Task 7): replace this stub with a real @mariozechner/pi-ai client
+function isTextBlock(block: { type: string }): block is TextContent {
+  return block.type === "text";
+}
+
 const llmClient: LlmClient = {
-  complete: async (_prompt: string, _opts?: { model?: string; temperature?: number }) => {
-    throw new Error("LlmClient not wired — pending Task 7 pi-ai integration");
+  complete: async (prompt: string, opts?: { model?: string; temperature?: number }) => {
+    const modelId = opts?.model === "gemini-flash" ? "gemini-2.5-flash" : "gemini-2.5-pro";
+    const model = getModel("google", modelId);
+    const apiKey = getEnvApiKey("google") ?? "";
+    const res = await completeSimple(
+      model,
+      {
+        messages: [
+          {
+            role: "user",
+            content: prompt,
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      {
+        apiKey,
+        temperature: opts?.temperature ?? 0,
+        maxTokens: 4096,
+      },
+    );
+    return res.content
+      .filter(isTextBlock)
+      .map((b) => b.text)
+      .join("");
   },
 };
 
