@@ -159,6 +159,18 @@ export class SessionStore {
       .run(JSON.stringify(log), Date.now(), request_id);
   }
 
+  setExecutionLog(request_id: string, log: ExecutionLogEntry[]): void {
+    this.db
+      .prepare("UPDATE triage_sessions SET execution_log = ?, updated_at = ? WHERE request_id = ?")
+      .run(JSON.stringify(log), Date.now(), request_id);
+  }
+
+  setFailedAtStep(request_id: string, step_idx: number): void {
+    this.db
+      .prepare("UPDATE triage_sessions SET failed_at_step = ?, updated_at = ? WHERE request_id = ?")
+      .run(step_idx, Date.now(), request_id);
+  }
+
   private hydrate(row: Record<string, unknown>): TriageSession {
     return {
       request_id: row.request_id as string,
