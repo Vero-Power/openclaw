@@ -9,6 +9,7 @@ import {
   openTriageDb,
   bootstrapActionCatalog,
   parseApprovalReply,
+  handleChatMessage,
 } from "../../triage/index.js";
 import type { LlmClient } from "../../triage/llm-client.js";
 import type { Plan } from "../../triage/types.js";
@@ -88,9 +89,8 @@ function getPlanner(): Planner {
 }
 
 /**
- * @returns true when the message was consumed by the triage pipeline (plan posted, awaiting approval).
- *          false when classifier judged the message as non-task chat — caller should fall through
- *          to JR's normal chat handler.
+ * @returns true always — either the triage pipeline consumed the message (plan posted, awaiting
+ *          approval) or chat-v2 handled it (reasoner+responder reply posted). Never falls through.
  */
 export async function runTriagePipeline(
   event: SlackMessageEvent,
@@ -113,9 +113,29 @@ export async function runTriagePipeline(
   getStore().transition(session.request_id, "CLASSIFIED");
 
   if (!c.is_task) {
-    // Not a task — cancel the session and signal caller to fall through to chat handler
+    // Not a task — cancel the session and route to chat-v2 (reasoner + responder)
     getStore().transition(session.request_id, "CANCELLED");
-    return false;
+    const isDm = !event.channel?.startsWith("C");
+    await handleChatMessage(
+      {
+        userMessage: event.text ?? "",
+        channel: event.channel,
+        threadTs: event.thread_ts ?? event.ts,
+        isDm,
+      },
+      {
+        llm: llmClient,
+        slackPost: async (params) => {
+          await ctx.app.client.chat.postMessage({
+            token: ctx.botToken,
+            channel: params.channel,
+            thread_ts: params.thread_ts,
+            text: params.text,
+          });
+        },
+      },
+    );
+    return true;
   }
 
   getStore().transition(session.request_id, "PLANNING");

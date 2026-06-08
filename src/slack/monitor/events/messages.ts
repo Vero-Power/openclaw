@@ -2,7 +2,7 @@ import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { danger } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { slackMessageGate } from "../../../triage/gate.js";
-import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
+import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMessageHandler } from "../message-handler.js";
@@ -51,6 +51,9 @@ export function registerSlackMessageEvents(params: {
       }
 
       const message = event as SlackMessageEvent;
+      ctx.runtime.log(
+        `[DIAG msg-handler] ts=${message.ts ?? "?"} subtype=${message.subtype ?? "none"} channel=${message.channel} user=${message.user ?? "?"} text="${(message.text ?? "").slice(0, 40)}"`,
+      );
       if (message.subtype === "message_changed") {
         const changed = event as SlackMessageChangedEvent;
         const channelId = changed.channel;
@@ -112,32 +115,13 @@ export function registerSlackMessageEvents(params: {
         allowed_channels: ["*"],
       });
       if (gateResult.eligible) {
-        const consumed = await runTriagePipeline(message, ctx);
-        if (consumed) {
-          return;
-        }
-        // Classifier said non-task — fall through to the normal chat handler below.
+        await runTriagePipeline(message, ctx);
+        return;
       }
 
       await handleSlackMessage(message, { source: "message" });
     } catch (err) {
       ctx.runtime.error?.(danger(`slack handler failed: ${String(err)}`));
-    }
-  });
-
-  ctx.app.event("app_mention", async ({ event, body }: SlackEventMiddlewareArgs<"app_mention">) => {
-    try {
-      if (ctx.shouldDropMismatchedSlackEvent(body)) {
-        return;
-      }
-
-      const mention = event as SlackAppMentionEvent;
-      await handleSlackMessage(mention as unknown as SlackMessageEvent, {
-        source: "app_mention",
-        wasMentioned: true,
-      });
-    } catch (err) {
-      ctx.runtime.error?.(danger(`slack mention handler failed: ${String(err)}`));
     }
   });
 }
