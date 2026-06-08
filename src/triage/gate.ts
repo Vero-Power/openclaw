@@ -25,5 +25,11 @@ export function slackMessageGate(input: GateInput): GateResult {
   if (!input.allowed_channels.includes("*") && !input.allowed_channels.includes(input.channel)) {
     return { eligible: false, reason: `channel ${input.channel} not in allowlist` };
   }
+  if (!input.channel.startsWith("D") && !input.text.includes(`<@${input.jr_user_id}>`)) {
+    return {
+      eligible: false,
+      reason: `not a DM and message does not mention <@${input.jr_user_id}>`,
+    };
+  }
   return { eligible: true };
 }
