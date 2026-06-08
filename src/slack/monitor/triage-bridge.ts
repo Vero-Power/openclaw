@@ -115,7 +115,7 @@ export async function runTriagePipeline(
   if (!c.is_task) {
     // Not a task — cancel the session and route to chat-v2 (reasoner + responder)
     getStore().transition(session.request_id, "CANCELLED");
-    const isDm = !event.channel?.startsWith("C");
+    const isDm = event.channel?.startsWith("D") ?? false;
     await handleChatMessage(
       {
         userMessage: event.text ?? "",
