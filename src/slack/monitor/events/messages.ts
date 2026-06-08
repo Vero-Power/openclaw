@@ -112,8 +112,11 @@ export function registerSlackMessageEvents(params: {
         allowed_channels: ["*"],
       });
       if (gateResult.eligible) {
-        await runTriagePipeline(message, ctx);
-        return;
+        const consumed = await runTriagePipeline(message, ctx);
+        if (consumed) {
+          return;
+        }
+        // Classifier said non-task — fall through to the normal chat handler below.
       }
 
       await handleSlackMessage(message, { source: "message" });

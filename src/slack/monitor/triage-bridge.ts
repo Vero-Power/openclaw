@@ -87,10 +87,15 @@ function getPlanner(): Planner {
   return lazyPlanner;
 }
 
+/**
+ * @returns true when the message was consumed by the triage pipeline (plan posted, awaiting approval).
+ *          false when classifier judged the message as non-task chat — caller should fall through
+ *          to JR's normal chat handler.
+ */
 export async function runTriagePipeline(
   event: SlackMessageEvent,
   ctx: SlackMonitorContext,
-): Promise<void> {
+): Promise<boolean> {
   const expired = getStore().expireStale(STALE_SESSION_IDLE_MS);
   if (expired > 0) {
     ctx.runtime.log(`[triage] expired ${expired} stale session(s) to ABANDONED`);
@@ -108,9 +113,9 @@ export async function runTriagePipeline(
   getStore().transition(session.request_id, "CLASSIFIED");
 
   if (!c.is_task) {
-    // Not a task — cancel the session; existing chat handler should handle it upstream
+    // Not a task — cancel the session and signal caller to fall through to chat handler
     getStore().transition(session.request_id, "CANCELLED");
-    return;
+    return false;
   }
 
   getStore().transition(session.request_id, "PLANNING");
@@ -127,6 +132,7 @@ export async function runTriagePipeline(
   });
   getStore().updateProgressTs(session.request_id, posted.ts ?? "");
   getStore().transition(session.request_id, "AWAITING_APPROVAL");
+  return true;
 }
 
 /**
