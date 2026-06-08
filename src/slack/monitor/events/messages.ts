@@ -95,8 +95,13 @@ export function registerSlackMessageEvents(params: {
 
       // TODO(Task 6): triage gate — guarded by OPENCLAW_TRIAGE_REIMPL=1 feature flag
       if (message.thread_ts && message.thread_ts !== message.ts) {
-        // Thread reply: check for active triage approval signal first
-        await handleThreadReplyForActiveTriage(message, ctx);
+        // Thread reply: check for active triage approval signal first.
+        // If the handler consumed the message (returned true), stop here — do NOT
+        // fall through to the gate, which would create a duplicate triage session.
+        const consumed = await handleThreadReplyForActiveTriage(message, ctx);
+        if (consumed) {
+          return;
+        }
       }
       const gateResult = slackMessageGate({
         user: message.user ?? "",

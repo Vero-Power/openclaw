@@ -48,37 +48,75 @@ const llmClient: LlmClient = {
   },
 };
 
-const db = openTriageDb(join(homedir(), ".openclaw/triage.db"));
-const store = new SessionStore(db);
-const registry = bootstrapActionCatalog();
-const classifier = new Classifier(llmClient);
-const planner = new Planner(llmClient, registry);
+// Lazy singletons — only initialize when triage actually fires.
+// Module-level eager init would crash the gateway when the feature flag is off.
+let lazyDb: ReturnType<typeof openTriageDb> | null = null;
+let lazyStore: SessionStore | null = null;
+let lazyRegistry: ReturnType<typeof bootstrapActionCatalog> | null = null;
+let lazyClassifier: Classifier | null = null;
+let lazyPlanner: Planner | null = null;
+
+const STALE_SESSION_IDLE_MS = 30 * 60 * 1000; // 30 minutes
+
+function getStore(): SessionStore {
+  if (!lazyStore) {
+    lazyDb = openTriageDb(join(homedir(), ".openclaw/triage.db"));
+    lazyStore = new SessionStore(lazyDb);
+  }
+  return lazyStore;
+}
+
+function getRegistry(): ReturnType<typeof bootstrapActionCatalog> {
+  if (!lazyRegistry) {
+    lazyRegistry = bootstrapActionCatalog();
+  }
+  return lazyRegistry;
+}
+
+function getClassifier(): Classifier {
+  if (!lazyClassifier) {
+    lazyClassifier = new Classifier(llmClient);
+  }
+  return lazyClassifier;
+}
+
+function getPlanner(): Planner {
+  if (!lazyPlanner) {
+    lazyPlanner = new Planner(llmClient, getRegistry());
+  }
+  return lazyPlanner;
+}
 
 export async function runTriagePipeline(
   event: SlackMessageEvent,
   ctx: SlackMonitorContext,
 ): Promise<void> {
-  const session = store.create({
+  const expired = getStore().expireStale(STALE_SESSION_IDLE_MS);
+  if (expired > 0) {
+    ctx.runtime.log(`[triage] expired ${expired} stale session(s) to ABANDONED`);
+  }
+
+  const session = getStore().create({
     channel: event.channel,
     thread_ts: event.thread_ts ?? event.ts ?? event.event_ts ?? "",
     requester_user_id: event.user ?? "",
     requester_message: event.text ?? "",
   });
 
-  const c = await classifier.classify(event.text ?? "");
-  store.setClassifierOutput(session.request_id, c);
-  store.transition(session.request_id, "CLASSIFIED");
+  const c = await getClassifier().classify(event.text ?? "");
+  getStore().setClassifierOutput(session.request_id, c);
+  getStore().transition(session.request_id, "CLASSIFIED");
 
   if (!c.is_task) {
     // Not a task — cancel the session; existing chat handler should handle it upstream
-    store.transition(session.request_id, "CANCELLED");
+    getStore().transition(session.request_id, "CANCELLED");
     return;
   }
 
-  store.transition(session.request_id, "PLANNING");
-  const plan = await planner.plan(event.text ?? "");
-  store.setFinalPlan(session.request_id, plan);
-  store.appendPlanHistory(session.request_id, { plan, edit_text: null, ts: Date.now() });
+  getStore().transition(session.request_id, "PLANNING");
+  const plan = await getPlanner().plan(event.text ?? "");
+  getStore().setFinalPlan(session.request_id, plan);
+  getStore().appendPlanHistory(session.request_id, { plan, edit_text: null, ts: Date.now() });
 
   const planText = renderPlanForApproval(plan);
   const posted = await ctx.app.client.chat.postMessage({
@@ -87,31 +125,47 @@ export async function runTriagePipeline(
     thread_ts: event.thread_ts ?? event.ts,
     text: planText,
   });
-  store.updateProgressTs(session.request_id, posted.ts ?? "");
-  store.transition(session.request_id, "AWAITING_APPROVAL");
+  getStore().updateProgressTs(session.request_id, posted.ts ?? "");
+  getStore().transition(session.request_id, "AWAITING_APPROVAL");
 }
 
+/**
+ * Handle a Slack thread reply that may be an approval signal for an active triage session.
+ *
+ * Returns true if the message was consumed (caller should NOT fall through to re-triage).
+ * Returns false if there is no active session for this thread (caller may proceed normally).
+ */
 export async function handleThreadReplyForActiveTriage(
   event: SlackMessageEvent,
   ctx: SlackMonitorContext,
-): Promise<void> {
-  const thread_ts = event.thread_ts;
-  if (!thread_ts) {
-    return;
+): Promise<boolean> {
+  const expired = getStore().expireStale(STALE_SESSION_IDLE_MS);
+  if (expired > 0) {
+    ctx.runtime.log(`[triage] expired ${expired} stale session(s) to ABANDONED`);
   }
 
-  const active = store.findActive(event.channel, thread_ts);
+  const thread_ts = event.thread_ts;
+  if (!thread_ts) {
+    return false;
+  }
+
+  const active = getStore().findActive(event.channel, thread_ts);
   if (!active) {
-    return;
+    return false;
   }
   if (active.state !== "AWAITING_APPROVAL") {
-    return;
+    // Session is active but not yet waiting for approval (e.g. still PLANNING).
+    // Swallow the message silently so the re-triage gate does not see it.
+    ctx.runtime.log(
+      `[triage] thread reply ignored — session ${active.request_id} is in ${active.state}, not AWAITING_APPROVAL`,
+    );
+    return true;
   }
 
   const signal = parseApprovalReply(event.text ?? "");
 
   if (signal.kind === "approve") {
-    store.transition(active.request_id, "EXECUTING");
+    getStore().transition(active.request_id, "EXECUTING");
     const slackBridge = {
       post: async (text: string) => {
         const r = await ctx.app.client.chat.postMessage({
@@ -131,10 +185,10 @@ export async function handleThreadReplyForActiveTriage(
         });
       },
     };
-    const exec = new Executor({ store, registry, slack: slackBridge });
+    const exec = new Executor({ store: getStore(), registry: getRegistry(), slack: slackBridge });
     await exec.run(active.request_id);
   } else if (signal.kind === "cancel") {
-    store.transition(active.request_id, "CANCELLED");
+    getStore().transition(active.request_id, "CANCELLED");
     await ctx.app.client.chat.postMessage({
       token: ctx.botToken,
       channel: event.channel,
@@ -142,13 +196,13 @@ export async function handleThreadReplyForActiveTriage(
       text: "Cancelled. Nothing executed.",
     });
   } else if (signal.kind === "edit") {
-    store.transition(active.request_id, "EDITING");
-    const newPlan = await planner.replan(
+    getStore().transition(active.request_id, "EDITING");
+    const newPlan = await getPlanner().replan(
       active.requester_message,
       active.final_plan!,
       signal.edit_text,
     );
-    const diff = planner.renderDiff(active.final_plan!, newPlan);
+    const diff = getPlanner().renderDiff(active.final_plan!, newPlan);
     if (active.progress_ts) {
       await ctx.app.client.chat.update({
         token: ctx.botToken,
@@ -157,15 +211,16 @@ export async function handleThreadReplyForActiveTriage(
         text: `${diff}\n\nReply **yes** to approve the revision, or describe another edit.`,
       });
     }
-    store.setFinalPlan(active.request_id, newPlan);
-    store.appendPlanHistory(active.request_id, {
+    getStore().setFinalPlan(active.request_id, newPlan);
+    getStore().appendPlanHistory(active.request_id, {
       plan: newPlan,
       edit_text: signal.edit_text,
       ts: Date.now(),
     });
-    store.transition(active.request_id, "AWAITING_APPROVAL");
+    getStore().transition(active.request_id, "AWAITING_APPROVAL");
   }
-  // signal.kind === "ignore" → no-op
+  // signal.kind === "ignore" → still consumed (the thread belongs to active triage)
+  return true;
 }
 
 function renderPlanForApproval(plan: Plan): string {

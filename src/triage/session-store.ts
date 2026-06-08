@@ -17,6 +17,13 @@ export interface CreateSessionInput {
   requester_message: string;
 }
 
+const TERMINAL_STATES: ReadonlyArray<TriageState> = [
+  "COMPLETE",
+  "CANCELLED",
+  "ABANDONED",
+  "FAILED_AT_STEP",
+];
+
 export class SessionStore {
   constructor(private db: DatabaseType) {}
 
@@ -109,6 +116,27 @@ export class SessionStore {
       return null;
     }
     return this.hydrate(row);
+  }
+
+  /**
+   * Opportunistic garbage collection: transition all non-terminal sessions that
+   * have been idle for longer than `maxIdleMs` milliseconds to ABANDONED.
+   *
+   * Designed to run at the top of pipeline entry points — no background process
+   * required. Returns the number of sessions that were expired.
+   */
+  expireStale(maxIdleMs: number): number {
+    const cutoff = Date.now() - maxIdleMs;
+    const placeholders = TERMINAL_STATES.map(() => "?").join(", ");
+    const result = this.db
+      .prepare(
+        `UPDATE triage_sessions
+         SET state = 'ABANDONED', updated_at = ?
+         WHERE state NOT IN (${placeholders})
+           AND updated_at < ?`,
+      )
+      .run(Date.now(), ...TERMINAL_STATES, cutoff);
+    return result.changes;
   }
 
   updateProgressTs(request_id: string, progress_ts: string): void {
