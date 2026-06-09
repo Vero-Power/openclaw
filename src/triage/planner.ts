@@ -1,3 +1,4 @@
+import type { Database as DatabaseType } from "better-sqlite3";
 import type { ActionRegistry } from "./actions/registry.js";
 import type { LlmClient } from "./llm-client.js";
 import { PlanSchema, type Plan } from "./types.js";
@@ -15,24 +16,63 @@ Return JSON only:
 
 No markdown fences, no prose.`;
 
+export interface PlannerOptions {
+  sentinelDb?: DatabaseType;
+}
+
 export class Planner {
+  private sentinelDb: DatabaseType | null;
+
   constructor(
     private llm: LlmClient,
     private registry: ActionRegistry,
-  ) {}
+    options?: PlannerOptions,
+  ) {
+    this.sentinelDb = options?.sentinelDb ?? null;
+  }
 
   async plan(message: string): Promise<Plan> {
     const catalog = this.registry.serializeForPrompt();
-    const prompt = `${SYSTEM_PROMPT_HEADER}\n\n${catalog}\n\nUser request: ${JSON.stringify(message)}\n\nJSON:`;
+    const sentinelBlock = this.buildSentinelContext();
+    const prompt = `${SYSTEM_PROMPT_HEADER}\n\n${catalog}\n${sentinelBlock}\nUser request: ${JSON.stringify(message)}\n\nJSON:`;
     const raw = await this.llm.complete(prompt, { model: "gemini-pro", temperature: 0 });
     return this.parseAndValidate(raw);
   }
 
   async replan(message: string, previous: Plan, edit_text: string): Promise<Plan> {
     const catalog = this.registry.serializeForPrompt();
-    const prompt = `${SYSTEM_PROMPT_HEADER}\n\n${catalog}\n\nUser request: ${JSON.stringify(message)}\n\nPrevious plan:\n${JSON.stringify(previous, null, 2)}\n\nUser edit: ${JSON.stringify(edit_text)}\n\nProduce the REVISED plan as JSON:`;
+    const sentinelBlock = this.buildSentinelContext();
+    const prompt = `${SYSTEM_PROMPT_HEADER}\n\n${catalog}\n${sentinelBlock}\nUser request: ${JSON.stringify(message)}\n\nPrevious plan:\n${JSON.stringify(previous, null, 2)}\n\nUser edit: ${JSON.stringify(edit_text)}\n\nProduce the REVISED plan as JSON:`;
     const raw = await this.llm.complete(prompt, { model: "gemini-pro", temperature: 0 });
     return this.parseAndValidate(raw);
+  }
+
+  private buildSentinelContext(): string {
+    if (!this.sentinelDb) {
+      return "";
+    }
+    try {
+      const recent = this.sentinelDb
+        .prepare(
+          `SELECT category, summary, evidence, confidence FROM insights
+           ORDER BY generated_at DESC LIMIT 5`,
+        )
+        .all() as Array<{
+        category: string;
+        summary: string;
+        evidence: string;
+        confidence: number;
+      }>;
+      if (recent.length === 0) {
+        return "";
+      }
+      const lines = recent.map(
+        (i) => `- ${i.category} (conf ${i.confidence.toFixed(2)}): ${i.summary} — ${i.evidence}`,
+      );
+      return `\nSentinel context (recent insights for situational awareness):\n${lines.join("\n")}\n`;
+    } catch {
+      return "";
+    }
   }
 
   private parseAndValidate(raw: string): Plan {
