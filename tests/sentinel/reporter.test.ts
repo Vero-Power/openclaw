@@ -58,3 +58,72 @@ describe("Reporter", () => {
     db.close();
   });
 });
+
+describe("Reporter — weekly + ideas", () => {
+  beforeEach(() => {
+    libPath = mkdtempSync(join(tmpdir(), "jr-library-wk-"));
+    dbPath = join(libPath, "sentinel.db");
+    ensureLibrarySkeleton(libPath);
+  });
+  afterEach(() => {
+    rmSync(libPath, { recursive: true, force: true });
+  });
+
+  it("writeWeeklyDigest writes a markdown file + DMs Kaleb", async () => {
+    const db = openSentinelDb(dbPath);
+    const now = Date.now();
+    db.prepare(
+      "INSERT INTO insights (category, summary, evidence, derived_from, confidence, generated_at) VALUES (?,?,?,?,?,?)",
+    ).run("pattern", "P1", "evidence 1", "[]", 0.9, now);
+    db.prepare(
+      "INSERT INTO insights (category, summary, evidence, derived_from, confidence, generated_at) VALUES (?,?,?,?,?,?)",
+    ).run("opportunity", "O1", "evidence 2", "[]", 0.7, now);
+
+    const dmCalls: Array<{ user: string; text: string }> = [];
+    const reporter = new Reporter({
+      db,
+      libPath,
+      dmUser: async (user, text) => {
+        dmCalls.push({ user, text });
+      },
+      kalebUserId: "U_KALEB",
+      ridgeUserId: "U_RIDGE",
+    });
+    const result = await reporter.writeWeeklyDigest();
+    expect(result.filedTo).toContain("reports/weekly/");
+    expect(dmCalls).toHaveLength(1);
+    expect(dmCalls[0].user).toBe("U_KALEB");
+    expect(dmCalls[0].text).toContain("Weekly digest");
+    db.close();
+  });
+
+  it("writeIdeasReport DMs Kaleb always, DMs Ridge for high-confidence strategic ideas", async () => {
+    const db = openSentinelDb(dbPath);
+    const now = Date.now();
+    db.prepare(
+      "INSERT INTO opportunities (title, scope, summary, evidence, proposed_at, confidence, status) VALUES (?,?,?,?,?,?,?)",
+    ).run("Ops idea", "ops-efficiency", "Save 10h/week", "10h", now, 0.8, "proposed");
+    db.prepare(
+      "INSERT INTO opportunities (title, scope, summary, evidence, proposed_at, confidence, status) VALUES (?,?,?,?,?,?,?)",
+    ).run("Strategic idea", "strategic-revenue", "Expand into X", "$50k/yr", now, 0.85, "proposed");
+
+    const dmCalls: Array<{ user: string; text: string }> = [];
+    const reporter = new Reporter({
+      db,
+      libPath,
+      dmUser: async (user, text) => {
+        dmCalls.push({ user, text });
+      },
+      kalebUserId: "U_KALEB",
+      ridgeUserId: "U_RIDGE",
+    });
+    await reporter.writeIdeasReport();
+    const kalebDM = dmCalls.find((d) => d.user === "U_KALEB");
+    const ridgeDM = dmCalls.find((d) => d.user === "U_RIDGE");
+    expect(kalebDM).toBeTruthy();
+    expect(kalebDM?.text).toContain("Ops idea");
+    expect(ridgeDM).toBeTruthy();
+    expect(ridgeDM?.text).toContain("Strategic idea");
+    db.close();
+  });
+});
