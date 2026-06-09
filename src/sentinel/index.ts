@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Database as DatabaseType } from "better-sqlite3";
 import type { LlmClient } from "../triage/llm-client.js";
+import { ConversationStore } from "./conversation-store.js";
 import { Curator } from "./curator.js";
 import { openSentinelDb } from "./db.js";
 import { Inquirer } from "./inquirer.js";
@@ -39,6 +40,7 @@ export interface SentinelDeps {
 export interface Sentinel {
   scheduler: SentinelScheduler;
   db: DatabaseType;
+  conversationStore: ConversationStore;
   runCycleOnce(): Promise<void>;
 }
 
@@ -58,6 +60,8 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
   );
   registry.register(createLaunchAgentsObserver({ filterPrefix: "openclaw" }));
 
+  const conversationStore = new ConversationStore(db);
+
   const synthesizer = new Synthesizer(deps.llm);
   const curator = new Curator(deps.llm);
   const reporter = new Reporter({
@@ -68,13 +72,22 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
     ridgeUserId: deps.ridgeUserId,
   });
   const monetizer = new Monetizer({ llm: deps.llm, db });
-  const inquirer = new Inquirer({ llm: deps.llm, db, libPath });
+  const inquirer = new Inquirer({
+    llm: deps.llm,
+    db,
+    libPath,
+    dmUser: deps.dmUser,
+    conversationStore,
+  });
 
   let lastDailyReportDate: string | null = null;
   let lastWeeklyReportWeek: number | null = null;
   let lastIdeasReportWeek: number | null = null;
 
   async function runCycleOnce(): Promise<void> {
+    // 0. Expire stale conversations (idle > 3 days → dropped)
+    conversationStore.expireStale(3 * 24 * 60 * 60 * 1000);
+
     // 1. Observe
     const runResult = await runObservers({ registry, db });
 
@@ -167,9 +180,16 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
     },
   });
 
-  return { scheduler, db, runCycleOnce };
+  return { scheduler, db, conversationStore, runCycleOnce };
 }
 
 export { SentinelScheduler } from "./scheduler.js";
 export { ensureLibrarySkeleton, regenerateIndex } from "./library.js";
 export { openSentinelDb } from "./db.js";
+export { ConversationStore } from "./conversation-store.js";
+export { handleConversationReply } from "./conversation-handler.js";
+export type {
+  ConversationReplyEvent,
+  ConversationReplyCtx,
+  ConversationReplyDeps,
+} from "./conversation-handler.js";

@@ -18,7 +18,7 @@ import { warn } from "../../globals.js";
 import { installRequestBodyLimitGuard } from "../../infra/http-body.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
-import { createSentinel } from "../../sentinel/index.js";
+import { createSentinel, ConversationStore, openSentinelDb } from "../../sentinel/index.js";
 import type { LlmClient } from "../../triage/llm-client.js";
 import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client.js";
@@ -277,7 +277,22 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   const handleSlackMessage = createSlackMessageHandler({ ctx, account });
 
-  registerSlackMonitorEvents({ ctx, account, handleSlackMessage });
+  // Open sentinel db and build ConversationStore early so the message handler can route
+  // inquiry replies before triage. The full sentinel scheduler is started after app.start().
+  const sentinelDbPath = join(homedir(), ".openclaw/sentinel.db");
+  const sentinelDb = openSentinelDb(sentinelDbPath);
+  const conversationStore = new ConversationStore(sentinelDb);
+  const conversationReplyDeps = {
+    store: conversationStore,
+    llm: sentinelLlmClient,
+    db: sentinelDb,
+    postMessage: async (channel: string, text: string) => {
+      await app.client.chat.postMessage({ token: botToken, channel, text });
+    },
+    kalebUserId: "U07KRVD2867",
+  };
+
+  registerSlackMonitorEvents({ ctx, account, handleSlackMessage, conversationReplyDeps });
   await registerSlackMonitorSlashCommands({ ctx, account });
   if (slackMode === "http" && slackHttpHandler) {
     unregisterHttpHandler = registerSlackHttpHandler({
@@ -403,6 +418,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
     // Start Sentinel JR scheduler after Slack is connected.
     // Gated by OPENCLAW_SENTINEL_ENABLED=1 inside SentinelScheduler.start().
+    const dmUserFn = async (userId: string, text: string) => {
+      await app.client.chat.postMessage({
+        token: botToken,
+        channel: userId,
+        text,
+      });
+    };
     const sentinel = createSentinel({
       llm: sentinelLlmClient,
       slackClient: app.client,
@@ -410,13 +432,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       triageDbPath: join(homedir(), ".openclaw/triage.db"),
       kalebUserId: "U07KRVD2867",
       ridgeUserId: undefined, // TODO: fill from config when known
-      dmUser: async (userId, text) => {
-        await app.client.chat.postMessage({
-          token: botToken,
-          channel: userId,
-          text,
-        });
-      },
+      dmUser: dmUserFn,
+      sentinelDbPath,
     });
     sentinel.scheduler.start();
     runtime.log?.("[sentinel] scheduler started (interval: 2h, flag: OPENCLAW_SENTINEL_ENABLED)");

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Database as DatabaseType } from "better-sqlite3";
 import { z } from "zod";
 import type { LlmClient } from "../triage/llm-client.js";
+import type { ConversationStore } from "./conversation-store.js";
 
 const QuestionsOutputSchema = z.object({
   questions: z.array(
@@ -28,8 +29,10 @@ export interface InquirerDeps {
   llm: LlmClient;
   db: DatabaseType;
   libPath: string;
-  // Phase A: not used; reserved for Phase B go-live
+  // Phase B: used when OPENCLAW_INQUIRER_LIVE=1
   dmUser?: (userId: string, text: string) => Promise<void>;
+  // Phase B: ConversationStore for opening tracked conversations
+  conversationStore?: ConversationStore;
 }
 
 export interface InquirerResult {
@@ -110,7 +113,29 @@ export class Inquirer {
       );
     }
 
-    // In Phase A: NEVER call this.deps.dmUser. The DM path goes live in Phase B.
+    // Phase B live mode: when OPENCLAW_INQUIRER_LIVE=1 AND dmUser + conversationStore are
+    // provided, open a tracked conversation and DM the person instead of queuing.
+    const liveMode =
+      process.env.OPENCLAW_INQUIRER_LIVE === "1" &&
+      this.deps.dmUser !== undefined &&
+      this.deps.conversationStore !== undefined;
+
+    if (liveMode) {
+      for (const q of eligible) {
+        // Enforce: only one open conversation per person at a time
+        const existing = this.deps.conversationStore!.findOpenForPerson(q.target_user_id);
+        if (existing) {
+          continue;
+        }
+        this.deps.conversationStore!.open({
+          person_user_id: q.target_user_id,
+          channel: q.target_user_id, // DM channel = user id in Slack
+          topic: q.topic,
+          opening_message: q.question_text,
+        });
+        await this.deps.dmUser!(q.target_user_id, q.question_text);
+      }
+    }
 
     return { questionsFiled: eligible.length };
   }

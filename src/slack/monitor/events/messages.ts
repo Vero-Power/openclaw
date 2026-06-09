@@ -1,6 +1,12 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { danger } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
+import type {
+  ConversationReplyEvent,
+  ConversationReplyCtx,
+  ConversationReplyDeps,
+} from "../../../sentinel/conversation-handler.js";
+import { handleConversationReply } from "../../../sentinel/conversation-handler.js";
 import { slackMessageGate } from "../../../triage/gate.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
@@ -16,8 +22,9 @@ import type {
 export function registerSlackMessageEvents(params: {
   ctx: SlackMonitorContext;
   handleSlackMessage: SlackMessageHandler;
+  conversationReplyDeps?: ConversationReplyDeps;
 }) {
-  const { ctx, handleSlackMessage } = params;
+  const { ctx, handleSlackMessage, conversationReplyDeps } = params;
 
   const resolveSlackChannelSystemEventTarget = async (channelId: string | undefined) => {
     const channelInfo = channelId ? await ctx.resolveChannelName(channelId) : {};
@@ -94,6 +101,28 @@ export function registerSlackMessageEvents(params: {
           contextKey: `slack:thread:broadcast:${channelId ?? "unknown"}:${messageId ?? "unknown"}`,
         });
         return;
+      }
+
+      // Conversation reply routing: check for an active sentinel inquiry conversation for this
+      // person BEFORE the triage gate. This ensures a person replying to JR's DM is handled
+      // as a conversation reply rather than being re-triaged as a new task.
+      if (
+        conversationReplyDeps &&
+        message.user &&
+        message.channel?.startsWith("D") &&
+        !message.subtype
+      ) {
+        const replyEvent: ConversationReplyEvent = {
+          user: message.user,
+          channel: message.channel,
+          text: message.text ?? "",
+          ts: message.ts ?? String(Date.now() / 1000),
+        };
+        const replyCtx: ConversationReplyCtx = { botUserId: ctx.botUserId };
+        const consumed = await handleConversationReply(replyEvent, replyCtx, conversationReplyDeps);
+        if (consumed) {
+          return;
+        }
       }
 
       // TODO(Task 6): triage gate — guarded by OPENCLAW_TRIAGE_REIMPL=1 feature flag
