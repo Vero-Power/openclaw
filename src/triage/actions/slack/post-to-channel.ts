@@ -14,7 +14,8 @@ export function createPostToChannelAction(
 ): CatalogAction<Args, { ok: boolean }> {
   return {
     name: "post_to_channel",
-    description: "Post a message in a specific Slack channel.",
+    description:
+      "Post a message in a specific Slack channel. Required args: { channel_id: string (Slack channel ID like 'C0AB50H2K9R'), text: string (the actual message content — compose from the operator's instruction, do NOT leave empty) }.",
     args_schema: ArgsSchema,
     idempotent: false,
     external_effect: true,

@@ -12,7 +12,8 @@ type Args = z.infer<typeof ArgsSchema>;
 export function createDmUserAction(deps: SlackMessageDeps): CatalogAction<Args, { ok: boolean }> {
   return {
     name: "dm_user",
-    description: "Send a direct message to a specific Slack user by their user ID.",
+    description:
+      "Send a direct message to a specific Slack user. Required args: { user_id: string (Slack user ID like 'U07KRVD2867' — resolve from the alias map if user mentions a name), text: string (the actual message body to send — compose this from the operator's instruction, do NOT leave empty) }.",
     args_schema: ArgsSchema,
     idempotent: false,
     external_effect: true,

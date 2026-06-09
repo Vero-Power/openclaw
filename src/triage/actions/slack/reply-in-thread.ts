@@ -15,7 +15,8 @@ export function createReplyInThreadAction(
 ): CatalogAction<Args, { ok: boolean }> {
   return {
     name: "reply_in_thread",
-    description: "Reply in a specific Slack thread.",
+    description:
+      "Reply in a specific Slack thread. Required args: { channel: string (channel ID), thread_ts: string (parent message ts), text: string (the actual reply text — compose from the operator's instruction, do NOT leave empty) }.",
     args_schema: ArgsSchema,
     idempotent: false,
     external_effect: true,

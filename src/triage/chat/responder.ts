@@ -29,11 +29,19 @@ JSON:`;
     } catch {
       return "Sorry — I had trouble responding. Try again?";
     }
+    const stripped = raw.trim().replace(/^```(?:json)?\n?|\n?```$/g, "");
+    // Try the strict JSON path first
     try {
-      const stripped = raw.trim().replace(/^```(?:json)?\n?|\n?```$/g, "");
       const parsed = ResponderOutputSchema.parse(JSON.parse(stripped));
       return parsed.reply.trim();
     } catch {
+      // Salvage path: LLM returned plain text instead of {reply: "..."}. As long
+      // as it's a reasonable Slack message length, use it directly. Better to
+      // surface the model's actual words than the "trouble formatting" fallback.
+      const cleaned = stripped.replace(/^["']|["']$/g, "").trim();
+      if (cleaned.length > 0 && cleaned.length <= 4000 && !cleaned.startsWith("{")) {
+        return cleaned;
+      }
       return "Sorry — I had trouble formatting my response.";
     }
   }
