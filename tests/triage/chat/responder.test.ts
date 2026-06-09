@@ -31,8 +31,21 @@ describe("Responder", () => {
     expect(result).toBe("Sure thing.");
   });
 
-  it("returns fallback string on unparseable output", async () => {
+  it("salvages plain-text LLM output as the reply (not the formatting fallback)", async () => {
     const stub = makeStubLlm("this is not json");
+    const responder = new Responder(stub);
+    const result = await responder.respond({
+      userMessage: "hi",
+      findings: "greeting",
+      persona: "terse",
+    });
+    // The salvage path uses the raw text directly so the user sees the model's
+    // actual words instead of "Sorry — I had trouble formatting my response."
+    expect(result).toBe("this is not json");
+  });
+
+  it("falls back to the formatting message when output looks like broken JSON", async () => {
+    const stub = makeStubLlm("{ broken json fragment");
     const responder = new Responder(stub);
     const result = await responder.respond({
       userMessage: "hi",
