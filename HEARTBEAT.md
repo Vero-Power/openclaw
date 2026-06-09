@@ -2,7 +2,16 @@
 
 # Keep this file empty (or with only comments) to skip heartbeat API calls.
 
-# Add tasks below when you want the agent to check something periodically.
+# Periodic monitoring is now handled by Sentinel JR
 
-- Check on long-running background scripts (like syncs or grading tasks). If they finish, automatically announce the results in Slack (#corporate-operations) so Kaleb stops crying.
-- Keep track of active requests from Ridge and ensure they are completed ASAP without waiting for a ping.
+# (`~/.openclaw/sentinel.db` + `~/.openclaw/jr-library/`), gated by
+
+# `OPENCLAW_SENTINEL_ENABLED=1`. The legacy heartbeat path is intentionally
+
+# silenced — no directives below means no LLM call fires every 10 minutes.
+
+# Add tasks below ONLY if you want to re-enable legacy periodic checks
+
+# (the agent will need an explicit instruction to emit HEARTBEAT_OK
+
+# when nothing's actionable, otherwise it'll spam Slack with prose).
