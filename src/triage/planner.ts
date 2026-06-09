@@ -18,10 +18,12 @@ No markdown fences, no prose.`;
 
 export interface PlannerOptions {
   sentinelDb?: DatabaseType;
+  userAliases?: Record<string, string>;
 }
 
 export class Planner {
   private sentinelDb: DatabaseType | null;
+  private userAliases: Record<string, string>;
 
   constructor(
     private llm: LlmClient,
@@ -29,12 +31,14 @@ export class Planner {
     options?: PlannerOptions,
   ) {
     this.sentinelDb = options?.sentinelDb ?? null;
+    this.userAliases = options?.userAliases ?? {};
   }
 
   async plan(message: string): Promise<Plan> {
     const catalog = this.registry.serializeForPrompt();
     const sentinelBlock = this.buildSentinelContext();
-    const prompt = `${SYSTEM_PROMPT_HEADER}\n\n${catalog}\n${sentinelBlock}\nUser request: ${JSON.stringify(message)}\n\nJSON:`;
+    const aliasBlock = this.buildAliasBlock();
+    const prompt = `${SYSTEM_PROMPT_HEADER}\n\n${catalog}\n${aliasBlock}${sentinelBlock}\nUser request: ${JSON.stringify(message)}\n\nJSON:`;
     const raw = await this.llm.complete(prompt, { model: "gemini-pro", temperature: 0 });
     return this.parseAndValidate(raw);
   }
@@ -42,9 +46,19 @@ export class Planner {
   async replan(message: string, previous: Plan, edit_text: string): Promise<Plan> {
     const catalog = this.registry.serializeForPrompt();
     const sentinelBlock = this.buildSentinelContext();
-    const prompt = `${SYSTEM_PROMPT_HEADER}\n\n${catalog}\n${sentinelBlock}\nUser request: ${JSON.stringify(message)}\n\nPrevious plan:\n${JSON.stringify(previous, null, 2)}\n\nUser edit: ${JSON.stringify(edit_text)}\n\nProduce the REVISED plan as JSON:`;
+    const aliasBlock = this.buildAliasBlock();
+    const prompt = `${SYSTEM_PROMPT_HEADER}\n\n${catalog}\n${aliasBlock}${sentinelBlock}\nUser request: ${JSON.stringify(message)}\n\nPrevious plan:\n${JSON.stringify(previous, null, 2)}\n\nUser edit: ${JSON.stringify(edit_text)}\n\nProduce the REVISED plan as JSON:`;
     const raw = await this.llm.complete(prompt, { model: "gemini-pro", temperature: 0 });
     return this.parseAndValidate(raw);
+  }
+
+  private buildAliasBlock(): string {
+    const entries = Object.entries(this.userAliases);
+    if (entries.length === 0) {
+      return "";
+    }
+    const lines = entries.map(([name, id]) => `- ${name} → ${id}`);
+    return `\nKnown user aliases (use these IDs when the user names a person):\n${lines.join("\n")}\n`;
   }
 
   private buildSentinelContext(): string {

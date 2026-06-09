@@ -143,3 +143,60 @@ describe("Planner — sentinel context injection (F1)", () => {
     expect(plan.steps).toHaveLength(1);
   });
 });
+
+describe("Planner — userAliases injection (F-B)", () => {
+  it("injects alias block into prompt when userAliases are provided", async () => {
+    let capturedPrompt = "";
+    const llm = {
+      complete: vi.fn(async (p: string) => {
+        capturedPrompt = p;
+        return JSON.stringify({
+          summary: "test",
+          confidence: 0.9,
+          steps: [{ action: "coperniqFirestoreIngest", args: {} }],
+        });
+      }),
+    };
+    const p = new Planner(llm as LlmClient, buildRegistry(), {
+      userAliases: { kaleb: "U07KRVD2867", ridge: "U09AABBCCDD" },
+    });
+    await p.plan("dm kaleb hey");
+    expect(capturedPrompt).toContain("Known user aliases");
+    expect(capturedPrompt).toContain("kaleb → U07KRVD2867");
+    expect(capturedPrompt).toContain("ridge → U09AABBCCDD");
+  });
+
+  it("omits alias block when userAliases is empty", async () => {
+    let capturedPrompt = "";
+    const llm = {
+      complete: vi.fn(async (p: string) => {
+        capturedPrompt = p;
+        return JSON.stringify({
+          summary: "test",
+          confidence: 0.9,
+          steps: [{ action: "coperniqFirestoreIngest", args: {} }],
+        });
+      }),
+    };
+    const p = new Planner(llm as LlmClient, buildRegistry(), { userAliases: {} });
+    await p.plan("refresh coperniq");
+    expect(capturedPrompt).not.toContain("Known user aliases");
+  });
+
+  it("omits alias block when no userAliases option is passed", async () => {
+    let capturedPrompt = "";
+    const llm = {
+      complete: vi.fn(async (p: string) => {
+        capturedPrompt = p;
+        return JSON.stringify({
+          summary: "test",
+          confidence: 0.9,
+          steps: [{ action: "coperniqFirestoreIngest", args: {} }],
+        });
+      }),
+    };
+    const p = new Planner(llm as LlmClient, buildRegistry());
+    await p.plan("refresh coperniq");
+    expect(capturedPrompt).not.toContain("Known user aliases");
+  });
+});

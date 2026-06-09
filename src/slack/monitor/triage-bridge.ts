@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { completeSimple, getEnvApiKey, getModel, type TextContent } from "@mariozechner/pi-ai";
+import type { SlackClientLike } from "../../triage/actions/index.js";
+import { SLACK_USER_ALIASES } from "../../triage/actions/slack/aliases.js";
 import {
   Classifier,
   Planner,
@@ -67,9 +69,12 @@ function getStore(): SessionStore {
   return lazyStore;
 }
 
-function getRegistry(): ReturnType<typeof bootstrapActionCatalog> {
+function getRegistry(
+  slackClient?: SlackClientLike,
+  botToken?: string,
+): ReturnType<typeof bootstrapActionCatalog> {
   if (!lazyRegistry) {
-    lazyRegistry = bootstrapActionCatalog();
+    lazyRegistry = bootstrapActionCatalog({ slackClient, botToken });
   }
   return lazyRegistry;
 }
@@ -83,7 +88,7 @@ function getClassifier(): Classifier {
 
 function getPlanner(): Planner {
   if (!lazyPlanner) {
-    lazyPlanner = new Planner(llmClient, getRegistry());
+    lazyPlanner = new Planner(llmClient, getRegistry(), { userAliases: SLACK_USER_ALIASES });
   }
   return lazyPlanner;
 }
@@ -139,7 +144,44 @@ export async function runTriagePipeline(
   }
 
   getStore().transition(session.request_id, "PLANNING");
-  const plan = await getPlanner().plan(event.text ?? "");
+
+  // Seed the registry with the live Slack client on first call (no-op on subsequent calls
+  // because getRegistry() memoises after the first invocation).
+  getRegistry(ctx.app.client as SlackClientLike, ctx.botToken);
+
+  let plan: Plan;
+  try {
+    plan = await getPlanner().plan(event.text ?? "");
+  } catch (planErr) {
+    // F-A: planner failed (e.g. produced an unknown action, invalid args, unparseable JSON).
+    // Cancel the session and fall through to chat-v2 so the user gets a coherent response.
+    ctx.runtime.log(
+      `[triage] planner error — cancelling session ${session.request_id} and falling back to chat-v2: ${String(planErr)}`,
+    );
+    getStore().transition(session.request_id, "CANCELLED");
+    const isDm = event.channel?.startsWith("D") ?? false;
+    await handleChatMessage(
+      {
+        userMessage: event.text ?? "",
+        channel: event.channel,
+        threadTs: event.thread_ts ?? event.ts,
+        isDm,
+      },
+      {
+        llm: llmClient,
+        slackPost: async (params) => {
+          await ctx.app.client.chat.postMessage({
+            token: ctx.botToken,
+            channel: params.channel,
+            thread_ts: params.thread_ts,
+            text: params.text,
+          });
+        },
+      },
+    );
+    return true;
+  }
+
   getStore().setFinalPlan(session.request_id, plan);
   getStore().appendPlanHistory(session.request_id, { plan, edit_text: null, ts: Date.now() });
 
@@ -211,7 +253,11 @@ export async function handleThreadReplyForActiveTriage(
         });
       },
     };
-    const exec = new Executor({ store: getStore(), registry: getRegistry(), slack: slackBridge });
+    const exec = new Executor({
+      store: getStore(),
+      registry: getRegistry(ctx.app.client as SlackClientLike, ctx.botToken),
+      slack: slackBridge,
+    });
     await exec.run(active.request_id);
   } else if (signal.kind === "cancel") {
     getStore().transition(active.request_id, "CANCELLED");
