@@ -421,6 +421,17 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     sentinel.scheduler.start();
     runtime.log?.("[sentinel] scheduler started (interval: 2h, flag: OPENCLAW_SENTINEL_ENABLED)");
 
+    // Optional boot-trigger: fire one cycle immediately. Set
+    // OPENCLAW_SENTINEL_BOOT_CYCLE=1 in ~/.openclaw/.env then restart.
+    // Useful for verifying the pipeline without waiting 2h for the next tick.
+    if (process.env.OPENCLAW_SENTINEL_BOOT_CYCLE === "1") {
+      runtime.log?.("[sentinel] boot-cycle requested — firing runCycleOnce immediately");
+      sentinel
+        .runCycleOnce()
+        .then(() => runtime.log?.("[sentinel] boot-cycle complete"))
+        .catch((err) => runtime.error?.(`[sentinel] boot-cycle failed: ${(err as Error).message}`));
+    }
+
     if (opts.abortSignal?.aborted) {
       return;
     }
