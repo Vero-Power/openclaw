@@ -29,7 +29,10 @@ export class Reporter {
   async writeDailySummary(): Promise<ReportResult> {
     const today = new Date();
     const yyyyMmDd = today.toISOString().slice(0, 10);
-    const startOfDay = new Date(yyyyMmDd + "T00:00:00").getTime();
+    // Parse as UTC midnight to match the UTC date string from toISOString.
+    // Local-timezone parse would mismatch when local time is on a different
+    // calendar day than UTC (e.g. tests running after 6pm MDT).
+    const startOfDay = Date.parse(yyyyMmDd + "T00:00:00.000Z");
     const endOfDay = startOfDay + 24 * 60 * 60 * 1000;
 
     const observations = this.deps.db
