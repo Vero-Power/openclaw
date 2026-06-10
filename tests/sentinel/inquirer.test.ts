@@ -11,6 +11,17 @@ import type { LlmClient } from "../../src/triage/llm-client.js";
 let libPath: string;
 let dbPath: string;
 
+// Test alias map — covers every synthetic user_id used in this file's stubs.
+// Anti-hallucination filter accepts only IDs that appear as values here.
+const TEST_ALIASES: Record<string, string> = {
+  alice: "U_ALICE",
+  kaleb: "U_KALEB",
+  ok: "U_OK",
+  opted_out: "U_OPTED_OUT",
+  test: "U_TEST",
+  x: "U_X",
+};
+
 describe("Inquirer (manual-review mode)", () => {
   beforeEach(() => {
     libPath = mkdtempSync(join(tmpdir(), "jr-library-inq-"));
@@ -43,7 +54,7 @@ describe("Inquirer (manual-review mode)", () => {
         }),
       ),
     };
-    const inq = new Inquirer({ llm, db, libPath });
+    const inq = new Inquirer({ llm, db, libPath, userAliases: TEST_ALIASES });
     const result = await inq.formulateQuestions();
     expect(result.questionsFiled).toBe(1);
     const queuePath = join(libPath, "reports/inquiry-queue.md");
@@ -75,6 +86,7 @@ describe("Inquirer (manual-review mode)", () => {
       llm,
       db,
       libPath,
+      userAliases: TEST_ALIASES,
       dmUser: async (user, text) => {
         dmCalls.push({ user, text });
       },
@@ -115,12 +127,49 @@ describe("Inquirer (manual-review mode)", () => {
         }),
       ),
     };
-    const inq = new Inquirer({ llm, db, libPath });
+    const inq = new Inquirer({ llm, db, libPath, userAliases: TEST_ALIASES });
     const result = await inq.formulateQuestions();
     expect(result.questionsFiled).toBe(1);
     const content = readFileSync(join(libPath, "reports/inquiry-queue.md"), "utf-8");
     expect(content).not.toContain("U_OPTED_OUT");
     expect(content).toContain("U_OK");
+    db.close();
+  });
+
+  it("rejects hallucinated user IDs — only known aliases are filed", async () => {
+    const db = openSentinelDb(dbPath);
+    db.prepare(
+      "INSERT INTO insights (category, summary, evidence, derived_from, confidence, generated_at) VALUES (?,?,?,?,?,?)",
+    ).run("friction", "test gap", "1 session", "[]", 0.3, Date.now());
+    const llm: LlmClient = {
+      complete: vi.fn(async () =>
+        JSON.stringify({
+          questions: [
+            {
+              // Hallucinated — not in TEST_ALIASES values
+              target_user_id: "U_INVENTED_PERSON",
+              topic: "anything",
+              question_text: "Made-up question to a made-up person?",
+              rationale: "LLM invented this user",
+            },
+            {
+              // Real — in TEST_ALIASES values
+              target_user_id: "U_KALEB",
+              topic: "real",
+              question_text: "Real question?",
+              rationale: "U_KALEB is known",
+            },
+          ],
+        }),
+      ),
+    };
+    const inq = new Inquirer({ llm, db, libPath, userAliases: TEST_ALIASES });
+    const result = await inq.formulateQuestions();
+    // Only the legitimate question is filed; hallucinated user gets dropped
+    expect(result.questionsFiled).toBe(1);
+    const content = readFileSync(join(libPath, "reports/inquiry-queue.md"), "utf-8");
+    expect(content).not.toContain("U_INVENTED_PERSON");
+    expect(content).toContain("U_KALEB");
     db.close();
   });
 });
@@ -167,6 +216,7 @@ describe("Inquirer (Phase B live mode — OPENCLAW_INQUIRER_LIVE=1)", () => {
       llm,
       db,
       libPath,
+      userAliases: TEST_ALIASES,
       dmUser: async (user, text) => {
         dmCalls.push({ user, text });
       },
@@ -230,6 +280,7 @@ describe("Inquirer (Phase B live mode — OPENCLAW_INQUIRER_LIVE=1)", () => {
       llm,
       db,
       libPath,
+      userAliases: TEST_ALIASES,
       dmUser: async (user, text) => {
         dmCalls.push({ user, text });
       },
@@ -279,6 +330,7 @@ describe("Inquirer (Phase B live mode — OPENCLAW_INQUIRER_LIVE=1)", () => {
       llm,
       db,
       libPath,
+      userAliases: TEST_ALIASES,
       dmUser: vi.fn(async () => {}),
       conversationStore,
     });
@@ -321,6 +373,7 @@ describe("Inquirer (Phase B live mode — OPENCLAW_INQUIRER_LIVE=1)", () => {
       llm,
       db,
       libPath,
+      userAliases: TEST_ALIASES,
       dmUser: async (user, text) => {
         dmCalls.push({ user, text });
       },

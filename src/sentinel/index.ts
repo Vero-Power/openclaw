@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Database as DatabaseType } from "better-sqlite3";
+import { SLACK_USER_ALIASES } from "../triage/actions/slack/aliases.js";
 import type { LlmClient } from "../triage/llm-client.js";
 import { ConversationStore } from "./conversation-store.js";
 import { Curator } from "./curator.js";
@@ -76,6 +77,7 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
     llm: deps.llm,
     db,
     libPath,
+    userAliases: SLACK_USER_ALIASES,
     dmUser: deps.dmUser,
     conversationStore,
   });

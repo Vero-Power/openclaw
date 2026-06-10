@@ -16,19 +16,24 @@ const QuestionsOutputSchema = z.object({
   ),
 });
 
-const SYSTEM_PROMPT = `You are JR's private inquirer. Look at recent low-confidence insights and identify knowledge gaps where asking a specific person at Vero would help.
+const SYSTEM_PROMPT_HEADER = `You are JR's private inquirer. Look at recent low-confidence insights and identify knowledge gaps where asking a specific person at Vero would help.
 
 For each gap, propose: who to ask (Slack user id), what topic, the actual question text (colleague tone, no preamble — get to the point), and your rationale.
+
+CRITICAL — you may ONLY target users from the "Known team members" list below. The list is the complete set of people you can DM. If no listed user is appropriate for a question, SKIP that question (do not file it). DO NOT invent Slack user IDs. DO NOT invent role names for people you have never seen named. Questions that target unlisted IDs will be rejected as hallucinations.
 
 Return JSON only:
 { "questions": [ { "target_user_id", "topic", "question_text", "rationale" } ] }
 
-Max 5 questions per cycle. If no gaps justify an inquiry, return { "questions": [] }.`;
+Max 5 questions per cycle. If no gaps justify an inquiry to a listed user, return { "questions": [] }.`;
 
 export interface InquirerDeps {
   llm: LlmClient;
   db: DatabaseType;
   libPath: string;
+  // Real workspace users JR may target. Map alias → Slack user ID.
+  // Required to prevent hallucinated user IDs in the queue / live DMs.
+  userAliases: Record<string, string>;
   // Phase B: used when OPENCLAW_INQUIRER_LIVE=1
   dmUser?: (userId: string, text: string) => Promise<void>;
   // Phase B: ConversationStore for opening tracked conversations
@@ -66,7 +71,16 @@ export class Inquirer {
           `[insight ${i.id}] (${i.category}, conf ${i.confidence.toFixed(2)}) ${i.summary} — ${i.evidence}`,
       )
       .join("\n");
-    const prompt = `${SYSTEM_PROMPT}\n\nLow-confidence insights:\n${insightLines}\n\nJSON:`;
+
+    const aliasLines = Object.entries(this.deps.userAliases)
+      .map(([alias, id]) => `- ${alias} (${id})`)
+      .join("\n");
+    const aliasBlock =
+      aliasLines.length > 0
+        ? `\n\nKnown team members (target only these IDs):\n${aliasLines}`
+        : "\n\nKnown team members: (none configured — return empty questions)";
+
+    const prompt = `${SYSTEM_PROMPT_HEADER}${aliasBlock}\n\nLow-confidence insights:\n${insightLines}\n\nJSON:`;
 
     let raw: string;
     try {
@@ -93,7 +107,15 @@ export class Inquirer {
       ).map((r) => r.person_user_id),
     );
 
-    const eligible = parsed.questions.filter((q) => !optedOut.has(q.target_user_id));
+    // Filter against the known-user allow-list. Reject any target_user_id the
+    // LLM invented that isn't in the userAliases map values. This is the
+    // anti-hallucination gate that protects Phase B live-mode from DMing
+    // made-up or randomly-guessed user IDs.
+    const allowedUserIds = new Set(Object.values(this.deps.userAliases));
+
+    const eligible = parsed.questions.filter(
+      (q) => allowedUserIds.has(q.target_user_id) && !optedOut.has(q.target_user_id),
+    );
 
     const queuePath = join(this.deps.libPath, "reports/inquiry-queue.md");
     const now = new Date().toISOString();
