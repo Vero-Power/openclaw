@@ -55,6 +55,31 @@ describe("Responder", () => {
     expect(result).toContain("formatting");
   });
 
+  it("extracts reply from <final>...</final> tag-wrapped output (strips <think> reasoning)", async () => {
+    const tagged =
+      '<think>The user is asking about solar. Be terse.</think><final>{"reply": "Solar = sunlight → electricity. What specifically?"}</final>';
+    const stub = makeStubLlm(tagged);
+    const responder = new Responder(stub);
+    const result = await responder.respond({
+      userMessage: "what about solar?",
+      findings: "knowledge question",
+      persona: "terse",
+    });
+    expect(result).toBe("Solar = sunlight → electricity. What specifically?");
+  });
+
+  it("strips standalone <think> blocks even without <final> wrap", async () => {
+    const taggedNoFinal = '<think>internal reasoning</think>\n{"reply": "Got it."}';
+    const stub = makeStubLlm(taggedNoFinal);
+    const responder = new Responder(stub);
+    const result = await responder.respond({
+      userMessage: "ok",
+      findings: "ack",
+      persona: "terse",
+    });
+    expect(result).toBe("Got it.");
+  });
+
   it("returns fallback string when LLM throws", async () => {
     const stub: LlmClient = {
       complete: async () => {
