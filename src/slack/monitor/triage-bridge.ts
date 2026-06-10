@@ -182,6 +182,36 @@ export async function runTriagePipeline(
     return true;
   }
 
+  // Empty-plan fallthrough: planner emitted no steps because no catalog action fit.
+  // The request is informational — route to chat-v2 to answer from JR's knowledge.
+  if (plan.steps.length === 0) {
+    ctx.runtime.log(
+      `[triage] empty plan from planner — request is informational, falling back to chat-v2 for session ${session.request_id}`,
+    );
+    getStore().transition(session.request_id, "CANCELLED");
+    const isDm = event.channel?.startsWith("D") ?? false;
+    await handleChatMessage(
+      {
+        userMessage: event.text ?? "",
+        channel: event.channel,
+        threadTs: event.thread_ts ?? event.ts,
+        isDm,
+      },
+      {
+        llm: llmClient,
+        slackPost: async (params) => {
+          await ctx.app.client.chat.postMessage({
+            token: ctx.botToken,
+            channel: params.channel,
+            thread_ts: params.thread_ts,
+            text: params.text,
+          });
+        },
+      },
+    );
+    return true;
+  }
+
   getStore().setFinalPlan(session.request_id, plan);
   getStore().appendPlanHistory(session.request_id, { plan, edit_text: null, ts: Date.now() });
 
