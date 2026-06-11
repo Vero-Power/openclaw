@@ -403,7 +403,7 @@ describe("file_followup decision", () => {
     expect(complete.mock.calls[0][0]).not.toContain("file_followup");
   });
 
-  it("file_followup decision without dep still replies and closes (no crash)", async () => {
+  it("file_followup decision without dep replies honestly (nothing queued) and closes", async () => {
     store.open({ person_user_id: "U_ALICE", channel: "D_CH1", topic: "t", opening_message: "m" });
     const llm: LlmClient = {
       complete: vi.fn().mockResolvedValue(
@@ -423,7 +423,11 @@ describe("file_followup decision", () => {
       { store, llm, db, postMessage },
     );
     expect(consumed).toBe(true);
-    expect(postMessage).toHaveBeenCalledWith("D_CH1", "Noted.");
+    expect(postMessage).toHaveBeenCalledWith(
+      "D_CH1",
+      "I tried to queue that follow-up but it failed on my end, so I can't promise it right now.",
+    );
+    expect(postMessage).not.toHaveBeenCalledWith("D_CH1", "Noted.");
     expect(store.findOpenForPerson("U_ALICE")).toBeNull();
   });
 

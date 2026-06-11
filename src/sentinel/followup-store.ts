@@ -1,7 +1,7 @@
 import type { Database as DatabaseType } from "better-sqlite3";
 
 export type FollowupKind = "dm_person" | "note" | "task";
-export type FollowupStatus = "pending" | "done" | "failed" | "skipped";
+export type FollowupStatus = "pending" | "in_flight" | "done" | "failed" | "skipped";
 export type FollowupSource = "conversation" | "chat";
 
 export interface FollowupRow {
@@ -83,6 +83,21 @@ export class FollowupStore {
       )
       .all(startMs, endMs) as RawRow[];
     return rows.map(hydrate);
+  }
+
+  // Atomic claim: only one caller (sentinel cycle vs. chat processById) can win a
+  // pending row, so the target never gets the same DM twice.
+  claim(id: number): boolean {
+    const result = this.db
+      .prepare(`UPDATE followups SET status = 'in_flight' WHERE id = ? AND status = 'pending'`)
+      .run(id);
+    return result.changes === 1;
+  }
+
+  release(id: number): void {
+    this.db
+      .prepare(`UPDATE followups SET status = 'pending' WHERE id = ? AND status = 'in_flight'`)
+      .run(id);
   }
 
   markDone(id: number): void {

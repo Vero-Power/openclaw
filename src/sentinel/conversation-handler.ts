@@ -205,7 +205,10 @@ export async function handleConversationReply(
     }
   } else if (decision.action === "file_followup") {
     // File BEFORE replying so reply_text ("I've queued it") is never a false claim.
-    let filed = true;
+    // No filing dep (flag off) counts as not filed — the LLM can emit this action
+    // unprompted, and replying with reply_text would be the false promise this
+    // feature exists to prevent.
+    let filed = Boolean(deps.fileFollowup);
     if (deps.fileFollowup) {
       try {
         await deps.fileFollowup({

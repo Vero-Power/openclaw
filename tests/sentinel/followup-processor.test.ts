@@ -201,6 +201,40 @@ describe("FollowupProcessor", () => {
     expect(store.get(id)!.last_error).toContain("slack down");
   });
 
+  it("concurrent processById and processPending never double-DM the same row", async () => {
+    let resolveDm!: () => void;
+    dmUser.mockImplementation(() => new Promise<void>((res) => (resolveDm = res)));
+    const id = store.insert({
+      kind: "dm_person",
+      payload: { target_alias: "ridge", topic: "t", question_text: "q" },
+      source: "conversation",
+    });
+    const inFlight = processor.processById(id);
+    expect(store.get(id)!.status).toBe("in_flight");
+    await processor.processPending();
+    expect(dmUser).toHaveBeenCalledTimes(1);
+    resolveDm();
+    await inFlight;
+    expect(store.get(id)!.status).toBe("done");
+  });
+
+  it("collision releases the claim so the row stays claimable", async () => {
+    conversationStore.open({
+      person_user_id: "U_RIDGE",
+      channel: "U_RIDGE",
+      topic: "existing",
+      opening_message: "hi",
+    });
+    const id = store.insert({
+      kind: "dm_person",
+      payload: { target_alias: "ridge", topic: "t", question_text: "q" },
+      source: "conversation",
+    });
+    await processor.processPending();
+    expect(store.get(id)!.status).toBe("pending");
+    expect(store.claim(id)).toBe(true);
+  });
+
   it("malformed dm_person payload is skipped, not retried", async () => {
     const id = store.insert({ kind: "dm_person", payload: { nope: true }, source: "chat" });
     await processor.processPending();

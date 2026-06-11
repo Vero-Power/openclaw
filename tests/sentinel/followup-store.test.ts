@@ -88,6 +88,24 @@ describe("FollowupStore", () => {
     expect(store.listPending()).toHaveLength(0);
   });
 
+  it("claim wins exactly once; release returns the row to pending", () => {
+    const id = store.insert({ kind: "note", payload: { text: "a" }, source: "chat" });
+    expect(store.claim(id)).toBe(true);
+    expect(store.claim(id)).toBe(false);
+    expect(store.get(id)!.status).toBe("in_flight");
+    expect(store.listPending()).toHaveLength(0);
+    store.release(id);
+    expect(store.get(id)!.status).toBe("pending");
+    expect(store.claim(id)).toBe(true);
+  });
+
+  it("claim refuses rows in terminal status", () => {
+    const id = store.insert({ kind: "note", payload: { text: "a" }, source: "chat" });
+    store.markDone(id);
+    expect(store.claim(id)).toBe(false);
+    expect(store.get(id)!.status).toBe("done");
+  });
+
   it("listCreatedBetween returns rows in window regardless of status", () => {
     const id = store.insert({ kind: "note", payload: { text: "a" }, source: "chat" });
     store.markDone(id);

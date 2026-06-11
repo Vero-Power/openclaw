@@ -39,13 +39,8 @@ export class FollowupProcessor {
     const pending = this.deps.store.listPending();
     let processed = 0;
     for (const row of pending) {
-      try {
-        const handled = await this.processOne(row);
-        if (handled) {
-          processed += 1;
-        }
-      } catch (err) {
-        this.deps.store.recordFailure(row.id, (err as Error).message);
+      if (await this.claimAndProcess(row)) {
+        processed += 1;
       }
     }
     return { processed };
@@ -58,10 +53,25 @@ export class FollowupProcessor {
     if (!row || row.status !== "pending") {
       return;
     }
+    await this.claimAndProcess(row);
+  }
+
+  // Atomically claims the row before dispatch so the sentinel cycle and a chat-filed
+  // processById can never both send the same DM. Non-terminal outcomes (collision,
+  // missing dep) release the claim so the row retries with attempts unchanged.
+  private async claimAndProcess(row: FollowupRow): Promise<boolean> {
+    if (!this.deps.store.claim(row.id)) {
+      return false;
+    }
     try {
-      await this.processOne(row);
+      const handled = await this.processOne(row);
+      if (!handled) {
+        this.deps.store.release(row.id);
+      }
+      return handled;
     } catch (err) {
       this.deps.store.recordFailure(row.id, (err as Error).message);
+      return false;
     }
   }
 
