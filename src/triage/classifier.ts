@@ -31,8 +31,11 @@ Examples:
 export class Classifier {
   constructor(private llm: LlmClient) {}
 
-  async classify(message: string): Promise<ClassifierOutput> {
-    const prompt = `${SYSTEM_PROMPT}\n\nMessage: ${JSON.stringify(message)}\n\nJSON:`;
+  async classify(message: string, context?: string): Promise<ClassifierOutput> {
+    const contextBlock = context
+      ? `\n\nConversation context (use it to resolve references like "that"/"it"/"him", and to recognize when the user is asking about something JR already did — status questions about past or queued actions are is_task=false, answerable from context):\n${context}\n`
+      : "";
+    const prompt = `${SYSTEM_PROMPT}${contextBlock}\n\nMessage: ${JSON.stringify(message)}\n\nJSON:`;
     let raw: string;
     try {
       raw = await this.llm.complete(prompt, { model: "gemini-flash", temperature: 0 });
