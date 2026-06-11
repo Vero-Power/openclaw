@@ -96,13 +96,12 @@ export class FollowupProcessor {
         person_user_id: targetUserId,
         channel: targetUserId,
         topic: parsed.data.topic,
-        opening_message: rawText,
+        opening_message: text,
       });
       this.deps.store.markDone(row.id);
       return true;
     }
 
-    // kind === "task"
     const parsed = TaskPayloadSchema.safeParse(row.payload);
     if (!parsed.success) {
       this.deps.store.markSkipped(row.id, "malformed task payload");
