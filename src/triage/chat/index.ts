@@ -42,13 +42,10 @@ export async function handleChatMessage(
   const reasoner = new Reasoner(deps.llm);
   const responder = new Responder(deps.llm);
 
-  const followupsEnabled = deps.fileFollowup !== undefined;
   const reasoned = await reasoner.reason({
     userMessage: input.userMessage,
     recentThread: input.recentThread,
-    followups: followupsEnabled
-      ? { enabled: true, knownAliases: deps.followupAliases ?? [] }
-      : undefined,
+    followups: deps.fileFollowup ? { knownAliases: deps.followupAliases ?? [] } : undefined,
   });
 
   const queuedActions: string[] = [];

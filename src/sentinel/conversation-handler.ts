@@ -73,7 +73,10 @@ Given the conversation history and the latest reply, decide what to do next:
 - If the reply reveals something urgent (broken process, incident, blocker) that Kaleb should know: return {"action":"escalate","summary":"<concise escalation summary>"}`;
 
 function buildFollowupPromptBlock(userAliases: Record<string, string> | undefined): string {
-  const aliasList = Object.keys(userAliases ?? {}).join(", ");
+  // Aliases land verbatim inside the prompt — drop anything that could smuggle instructions.
+  const aliasList = Object.keys(userAliases ?? {})
+    .filter((a) => /^[a-z0-9_.-]+$/i.test(a))
+    .join(", ");
   const kinds = aliasList ? `"dm_person"|"note"|"task"` : `"note"|"task"`;
   const dmShape = aliasList
     ? `\n  - dm_person: {"target_alias":"<one of: ${aliasList}>","topic":"...","question_text":"<the question to DM them>","context":"<one-line handoff, e.g. 'Kaleb pointed me your way about X'>"}`

@@ -24,7 +24,8 @@ Be terse. The responder will read your findings and produce the actual reply.
 Return JSON only, no markdown fences.`;
 
 function buildFollowupBlock(knownAliases: string[]): string {
-  const aliasList = knownAliases.join(", ");
+  // Aliases land verbatim inside the prompt — drop anything that could smuggle instructions.
+  const aliasList = knownAliases.filter((a) => /^[a-z0-9_.-]+$/i.test(a)).join(", ");
   const kinds = aliasList ? `"dm_person"|"note"|"task"` : `"note"|"task"`;
   const dmShape = aliasList
     ? `\n  - dm_person: {"target_alias":"<one of: ${aliasList}>","topic":"...","question_text":"<the question to DM them>","context":"<one-line handoff>"}`
@@ -50,15 +51,13 @@ export class Reasoner {
   async reason(input: {
     userMessage: string;
     recentThread?: string[];
-    followups?: { enabled: boolean; knownAliases: string[] };
+    followups?: { knownAliases: string[] };
   }): Promise<ReasonerOutput> {
     const threadContext = (input.recentThread ?? [])
       .slice(-5)
       .map((t, i) => `[turn ${i + 1}] ${t}`)
       .join("\n");
-    const followupBlock = input.followups?.enabled
-      ? buildFollowupBlock(input.followups.knownAliases)
-      : "";
+    const followupBlock = input.followups ? buildFollowupBlock(input.followups.knownAliases) : "";
     const prompt = `${SYSTEM_PROMPT}${followupBlock}\n\nRecent thread:\n${threadContext || "(none)"}\n\nUser message: ${JSON.stringify(input.userMessage)}\n\nJSON:`;
     let raw: string;
     try {
