@@ -93,6 +93,40 @@ export class Reporter {
       lines.push("");
     }
 
+    const followups = this.deps.db
+      .prepare(
+        `SELECT kind, payload, status, last_error FROM followups
+         WHERE created_at >= ? AND created_at < ? ORDER BY created_at ASC`,
+      )
+      .all(startOfDay, endOfDay) as Array<{
+      kind: string;
+      payload: string;
+      status: string;
+      last_error: string | null;
+    }>;
+
+    if (followups.length > 0) {
+      lines.push(`## Follow-ups (${followups.length})`, "");
+      for (const f of followups) {
+        let desc = f.payload;
+        try {
+          const p = JSON.parse(f.payload) as Record<string, unknown>;
+          if (typeof p.text === "string") {
+            desc = p.text;
+          } else if (typeof p.question_text === "string") {
+            desc = p.question_text;
+          } else if (typeof p.task_text === "string") {
+            desc = p.task_text;
+          }
+        } catch {
+          // keep raw payload
+        }
+        const errSuffix = f.last_error ? ` — ${f.last_error}` : "";
+        lines.push(`- **${f.kind}** [${f.status}]: ${desc}${errSuffix}`);
+      }
+      lines.push("");
+    }
+
     const relPath = join("reports/daily", `${yyyyMmDd}.md`);
     this.writeFile(relPath, lines.join("\n"));
     this.recordReport("daily", relPath);

@@ -57,6 +57,36 @@ describe("Reporter", () => {
     expect(content.toLowerCase()).toContain("quiet day");
     db.close();
   });
+
+  it("daily summary includes a Follow-ups section when followups exist today", async () => {
+    const db = openSentinelDb(dbPath);
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO followups (kind, payload, status, source, created_at)
+       VALUES ('note', ?, 'done', 'chat', ?)`,
+    ).run(JSON.stringify({ text: "check forecast sync" }), now);
+    db.prepare(
+      `INSERT INTO followups (kind, payload, status, source, last_error, created_at)
+       VALUES ('dm_person', ?, 'skipped', 'conversation', 'unknown alias: priya', ?)`,
+    ).run(JSON.stringify({ target_alias: "priya", topic: "t", question_text: "q" }), now);
+    const reporter = new Reporter({ db, libPath });
+    const result = await reporter.writeDailySummary();
+    const content = readFileSync(join(libPath, result.filedTo), "utf-8");
+    expect(content).toContain("## Follow-ups (2)");
+    expect(content).toContain("check forecast sync");
+    expect(content).toContain("skipped");
+    expect(content).toContain("unknown alias: priya");
+    db.close();
+  });
+
+  it("daily summary omits Follow-ups section when none exist", async () => {
+    const db = openSentinelDb(dbPath);
+    const reporter = new Reporter({ db, libPath });
+    const result = await reporter.writeDailySummary();
+    const content = readFileSync(join(libPath, result.filedTo), "utf-8");
+    expect(content).not.toContain("## Follow-ups");
+    db.close();
+  });
 });
 
 describe("Reporter — weekly + ideas", () => {
