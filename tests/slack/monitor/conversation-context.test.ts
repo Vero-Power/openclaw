@@ -213,10 +213,20 @@ describe("ConversationContextBuilder", () => {
     ins.run("U_KALEB", "D_CH1", "channel cleanup", now, now, "two channels are obsolete");
     ins.run("U_KALEB", "D_CH1", "no takeaway", now, now, null);
     ins.run("U_RIDGE", "D_CH2", "other person", now, now, "ridge takeaway");
+    ins.run(
+      "U_KALEB",
+      "D_CH1",
+      "stale topic",
+      now - 8 * 24 * 60 * 60 * 1000,
+      now - 8 * 24 * 60 * 60 * 1000,
+      "stale takeaway",
+    );
     const ctx = await makeBuilder(makeClient([])).build({ channel: "D_CH1", userId: "U_KALEB" });
     expect(ctx.full).toContain("channel cleanup");
     expect(ctx.full).toContain("two channels are obsolete");
     expect(ctx.full).not.toContain("ridge takeaway");
+    expect(ctx.full).not.toContain("no takeaway");
+    expect(ctx.full).not.toContain("stale takeaway");
   });
 
   it("degrades per-section: Slack failure still yields DB sections", async () => {
