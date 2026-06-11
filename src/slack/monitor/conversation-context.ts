@@ -57,6 +57,10 @@ const MAX_MSG_CHARS = 300;
 const FOLLOWUP_WINDOW_MS = 48 * 60 * 60 * 1000;
 const TAKEAWAY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 const STATUS_LABELS: Record<string, string> = {
   done: "sent/completed",
   pending: "queued, NOT sent yet",
@@ -122,7 +126,7 @@ export class ConversationContextBuilder {
       }
       const usable = messages
         .filter((m) => (m.text ?? "") !== "" && m.ts !== input.excludeTs)
-        .toSorted((a, b) => Number(a.ts ?? 0) - Number(b.ts ?? 0))
+        .toSorted((a, b) => (a.ts ?? "").localeCompare(b.ts ?? ""))
         .slice(-MAX_MESSAGES);
       if (usable.length === 0) {
         return "";
@@ -150,11 +154,15 @@ export class ConversationContextBuilder {
       const rows = this.deps.db
         .prepare(
           `SELECT kind, status, payload FROM followups
-           WHERE (requester_user_id = ? OR source_ref LIKE ?)
+           WHERE (requester_user_id = ? OR source_ref LIKE ? ESCAPE '\\')
              AND created_at >= ?
            ORDER BY created_at DESC LIMIT 10`,
         )
-        .all(input.userId, `${input.channel}%`, Date.now() - FOLLOWUP_WINDOW_MS) as Array<{
+        .all(
+          input.userId,
+          `${escapeLike(input.channel)}%`,
+          Date.now() - FOLLOWUP_WINDOW_MS,
+        ) as Array<{
         kind: string;
         status: string;
         payload: string;
