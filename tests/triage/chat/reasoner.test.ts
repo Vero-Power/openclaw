@@ -49,29 +49,6 @@ describe("Reasoner", () => {
     expect(result.confidence).toBe(0);
   });
 
-  it("passes contextBlock in the prompt", async () => {
-    const calls: string[] = [];
-    const stub: LlmClient = {
-      complete: async (prompt) => {
-        calls.push(prompt);
-        return JSON.stringify({ findings: "ok", confidence: 0.7 });
-      },
-    };
-    const reasoner = new Reasoner(stub);
-    await reasoner.reason({
-      userMessage: "follow-up",
-      contextBlock: "JR: I checked the queue.",
-    });
-    expect(calls[0]).toContain("I checked the queue.");
-  });
-
-  it("renders (none) when contextBlock is omitted", async () => {
-    const stub = makeStubLlm(JSON.stringify({ findings: "no thread", confidence: 0.5 }));
-    const reasoner = new Reasoner(stub);
-    const result = await reasoner.reason({ userMessage: "hello" });
-    expect(result.findings).toBe("no thread");
-  });
-
   it("includes the context block in the prompt when provided", async () => {
     const complete = vi.fn().mockResolvedValue('{"findings": "f", "confidence": 0.9}');
     const reasoner = new Reasoner({ complete });
