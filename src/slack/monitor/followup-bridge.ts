@@ -52,7 +52,7 @@ export async function fileAndProcessFollowup(
   try {
     const { store, processor } = getFollowupEngine(ctx);
     const id = store.insert(params);
-    await processor.processPending();
+    await processor.processById(id);
     const row = store.get(id);
     if (!row || row.status === "skipped" || row.status === "failed") {
       return null;

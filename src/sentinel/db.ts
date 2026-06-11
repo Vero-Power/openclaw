@@ -122,10 +122,19 @@ CREATE TABLE IF NOT EXISTS followups (
 CREATE INDEX IF NOT EXISTS idx_followups_status ON followups(status);
 `;
 
+// One connection per path: several subsystems (sentinel cycle, followup bridge)
+// open the same sentinel.db in one process and must not diverge.
+const connections = new Map<string, DatabaseType>();
+
 export function openSentinelDb(path: string): DatabaseType {
+  const cached = connections.get(path);
+  if (cached?.open) {
+    return cached;
+  }
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA_SQL);
+  connections.set(path, db);
   return db;
 }

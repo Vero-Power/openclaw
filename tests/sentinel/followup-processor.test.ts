@@ -181,6 +181,26 @@ describe("FollowupProcessor", () => {
     expect(store.get(id)!.attempts).toBe(0);
   });
 
+  it("processById processes only the targeted row", async () => {
+    const a = store.insert({ kind: "note", payload: { text: "a" }, source: "chat" });
+    const b = store.insert({ kind: "note", payload: { text: "b" }, source: "chat" });
+    await processor.processById(b);
+    expect(store.get(b)!.status).toBe("done");
+    expect(store.get(a)!.status).toBe("pending");
+  });
+
+  it("processById records failure on a thrown error", async () => {
+    dmUser.mockRejectedValue(new Error("slack down"));
+    const id = store.insert({
+      kind: "dm_person",
+      payload: { target_alias: "ridge", topic: "t", question_text: "q" },
+      source: "conversation",
+    });
+    await processor.processById(id);
+    expect(store.get(id)!.attempts).toBe(1);
+    expect(store.get(id)!.last_error).toContain("slack down");
+  });
+
   it("malformed dm_person payload is skipped, not retried", async () => {
     const id = store.insert({ kind: "dm_person", payload: { nope: true }, source: "chat" });
     await processor.processPending();

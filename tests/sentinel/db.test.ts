@@ -45,6 +45,16 @@ describe("sentinel db", () => {
     db2.close();
   });
 
+  it("reuses one connection per path while open, reopens after close", () => {
+    const db1 = openSentinelDb(TEST_DB);
+    const db2 = openSentinelDb(TEST_DB);
+    expect(db2).toBe(db1);
+    db1.close();
+    const db3 = openSentinelDb(TEST_DB);
+    expect(db3).not.toBe(db1);
+    db3.close();
+  });
+
   it("inserts an observation row", () => {
     const db = openSentinelDb(TEST_DB);
     const now = Date.now();

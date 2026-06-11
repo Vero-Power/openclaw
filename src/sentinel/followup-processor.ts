@@ -51,6 +51,20 @@ export class FollowupProcessor {
     return { processed };
   }
 
+  // Processes a single just-filed row so chat replies don't stall behind a backlog;
+  // the sentinel cycle drains the rest.
+  async processById(id: number): Promise<void> {
+    const row = this.deps.store.get(id);
+    if (!row || row.status !== "pending") {
+      return;
+    }
+    try {
+      await this.processOne(row);
+    } catch (err) {
+      this.deps.store.recordFailure(row.id, (err as Error).message);
+    }
+  }
+
   // Returns true when the row reached a terminal status; false when it stays pending
   // (collision or missing dep — retried on the next sentinel cycle).
   private async processOne(row: FollowupRow): Promise<boolean> {
