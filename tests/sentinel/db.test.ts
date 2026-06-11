@@ -59,4 +59,24 @@ describe("sentinel db", () => {
     expect(row.summary).toBe("5 sessions completed today");
     db.close();
   });
+
+  it("creates the followups table with expected columns", () => {
+    const db = openSentinelDb(TEST_DB);
+    const cols = db.prepare(`PRAGMA table_info(followups)`).all() as Array<{ name: string }>;
+    const names = cols.map((c) => c.name);
+    expect(names).toEqual([
+      "id",
+      "kind",
+      "payload",
+      "status",
+      "source",
+      "source_ref",
+      "requester_user_id",
+      "created_at",
+      "processed_at",
+      "attempts",
+      "last_error",
+    ]);
+    db.close();
+  });
 });

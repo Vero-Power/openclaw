@@ -104,6 +104,22 @@ CREATE TABLE IF NOT EXISTS observer_watermarks (
   source          TEXT PRIMARY KEY,
   last_observed_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS followups (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind              TEXT NOT NULL,
+  payload           TEXT NOT NULL,
+  status            TEXT NOT NULL DEFAULT 'pending',
+  source            TEXT NOT NULL,
+  source_ref        TEXT,
+  requester_user_id TEXT,
+  created_at        INTEGER NOT NULL,
+  processed_at      INTEGER,
+  attempts          INTEGER NOT NULL DEFAULT 0,
+  last_error        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_followups_status ON followups(status);
 `;
 
 export function openSentinelDb(path: string): DatabaseType {
