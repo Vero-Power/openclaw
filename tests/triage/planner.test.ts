@@ -200,3 +200,56 @@ describe("Planner — userAliases injection (F-B)", () => {
     expect(capturedPrompt).not.toContain("Known user aliases");
   });
 });
+
+describe("Planner — conversation context injection (Task 3)", () => {
+  it("plan() includes conversation context when provided", async () => {
+    const llm = {
+      complete: vi.fn(async () =>
+        JSON.stringify({
+          summary: "test",
+          confidence: 0.9,
+          steps: [{ action: "coperniqFirestoreIngest", args: {} }],
+        }),
+      ),
+    };
+    const planner = new Planner(llm as LlmClient, buildRegistry());
+    await planner.plan("do the thing we discussed", "Kaleb: archive #old-channel please");
+    expect(llm.complete.mock.calls[0][0]).toContain("archive #old-channel please");
+    expect(llm.complete.mock.calls[0][0]).toContain("Conversation context");
+  });
+
+  it("plan() omits the context block when absent", async () => {
+    const llm = {
+      complete: vi.fn(async () =>
+        JSON.stringify({
+          summary: "test",
+          confidence: 0.9,
+          steps: [{ action: "coperniqFirestoreIngest", args: {} }],
+        }),
+      ),
+    };
+    const planner = new Planner(llm as LlmClient, buildRegistry());
+    await planner.plan("do the thing");
+    expect(llm.complete.mock.calls[0][0]).not.toContain("Conversation context");
+  });
+
+  it("replan() includes conversation context when provided", async () => {
+    const previousPlan: Plan = {
+      summary: "initial",
+      confidence: 0.8,
+      steps: [{ action: "coperniqFirestoreIngest", args: {} }],
+    };
+    const llm = {
+      complete: vi.fn(async () =>
+        JSON.stringify({
+          summary: "Revised plan",
+          confidence: 0.9,
+          steps: [{ action: "coperniqFirestoreIngest", args: {} }],
+        }),
+      ),
+    };
+    const planner = new Planner(llm as LlmClient, buildRegistry());
+    await planner.replan("original request", previousPlan, "change step 2", "Kaleb: context line");
+    expect(llm.complete.mock.calls.at(-1)![0]).toContain("Kaleb: context line");
+  });
+});
