@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { Reasoner } from "../../../src/triage/chat/reasoner.js";
 import type { LlmClient } from "../../../src/triage/llm-client.js";
 
@@ -49,7 +49,7 @@ describe("Reasoner", () => {
     expect(result.confidence).toBe(0);
   });
 
-  it("passes recentThread context (last 5 turns)", async () => {
+  it("passes contextBlock in the prompt", async () => {
     const calls: string[] = [];
     const stub: LlmClient = {
       complete: async (prompt) => {
@@ -60,16 +60,32 @@ describe("Reasoner", () => {
     const reasoner = new Reasoner(stub);
     await reasoner.reason({
       userMessage: "follow-up",
-      recentThread: ["turn1", "turn2", "turn3", "turn4", "turn5", "turn6"],
+      contextBlock: "JR: I checked the queue.",
     });
-    expect(calls[0]).toContain("[turn 1] turn2");
-    expect(calls[0]).not.toContain("turn1");
+    expect(calls[0]).toContain("I checked the queue.");
   });
 
-  it("handles missing recentThread gracefully", async () => {
+  it("renders (none) when contextBlock is omitted", async () => {
     const stub = makeStubLlm(JSON.stringify({ findings: "no thread", confidence: 0.5 }));
     const reasoner = new Reasoner(stub);
     const result = await reasoner.reason({ userMessage: "hello" });
     expect(result.findings).toBe("no thread");
+  });
+
+  it("includes the context block in the prompt when provided", async () => {
+    const complete = vi.fn().mockResolvedValue('{"findings": "f", "confidence": 0.9}');
+    const reasoner = new Reasoner({ complete });
+    await reasoner.reason({
+      userMessage: "did you send it?",
+      contextBlock: "JR: I've queued a message to Ridge.",
+    });
+    expect(complete.mock.calls[0][0]).toContain("I've queued a message to Ridge.");
+  });
+
+  it("renders (none) when no context block", async () => {
+    const complete = vi.fn().mockResolvedValue('{"findings": "f", "confidence": 0.9}');
+    const reasoner = new Reasoner({ complete });
+    await reasoner.reason({ userMessage: "hello" });
+    expect(complete.mock.calls[0][0]).toContain("(none)");
   });
 });

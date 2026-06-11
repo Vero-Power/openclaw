@@ -44,7 +44,6 @@ export async function handleChatMessage(
 
   const reasoned = await reasoner.reason({
     userMessage: input.userMessage,
-    recentThread: input.recentThread,
     followups: deps.fileFollowup ? { knownAliases: deps.followupAliases ?? [] } : undefined,
   });
 

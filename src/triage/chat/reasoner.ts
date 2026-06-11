@@ -50,15 +50,11 @@ export class Reasoner {
 
   async reason(input: {
     userMessage: string;
-    recentThread?: string[];
+    contextBlock?: string;
     followups?: { knownAliases: string[] };
   }): Promise<ReasonerOutput> {
-    const threadContext = (input.recentThread ?? [])
-      .slice(-5)
-      .map((t, i) => `[turn ${i + 1}] ${t}`)
-      .join("\n");
     const followupBlock = input.followups ? buildFollowupBlock(input.followups.knownAliases) : "";
-    const prompt = `${SYSTEM_PROMPT}${followupBlock}\n\nRecent thread:\n${threadContext || "(none)"}\n\nUser message: ${JSON.stringify(input.userMessage)}\n\nJSON:`;
+    const prompt = `${SYSTEM_PROMPT}${followupBlock}\n\nConversation context:\n${input.contextBlock || "(none)"}\n\nUser message: ${JSON.stringify(input.userMessage)}\n\nJSON:`;
     let raw: string;
     try {
       raw = await this.llm.complete(prompt, { model: "gemini-pro", temperature: 0 });
