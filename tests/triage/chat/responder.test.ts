@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { Responder } from "../../../src/triage/chat/responder.js";
 import type { LlmClient } from "../../../src/triage/llm-client.js";
 
@@ -109,5 +109,25 @@ describe("Responder", () => {
     await responder.respond({ userMessage: "hi", findings: "greeting", persona: "terse" });
     expect(seenOpts[0]?.model).toBe("gemini-flash");
     expect(seenOpts[0]?.temperature).toBe(0.5);
+  });
+
+  it("includes conversation history in the prompt when provided", async () => {
+    const complete = vi.fn().mockResolvedValue('{"reply": "ok"}');
+    const responder = new Responder({ complete });
+    await responder.respond({
+      userMessage: "did you send it?",
+      findings: "f",
+      persona: "p",
+      conversationHistory: "JR: I've queued a message to Ridge.",
+    });
+    expect(complete.mock.calls[0][0]).toContain("I've queued a message to Ridge.");
+    expect(complete.mock.calls[0][0]).toContain("Recent conversation");
+  });
+
+  it("omits the history block when absent", async () => {
+    const complete = vi.fn().mockResolvedValue('{"reply": "ok"}');
+    const responder = new Responder({ complete });
+    await responder.respond({ userMessage: "hi", findings: "f", persona: "p" });
+    expect(complete.mock.calls[0][0]).not.toContain("Recent conversation");
   });
 });
