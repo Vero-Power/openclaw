@@ -300,3 +300,132 @@ describe("handleConversationReply", () => {
     expect(posted).toHaveLength(0);
   });
 });
+
+describe("file_followup decision", () => {
+  let dbPath: string;
+  let db: DatabaseType;
+  let store: ConversationStore;
+
+  beforeEach(() => {
+    dbPath = join(
+      tmpdir(),
+      `sentinel-hcr-fu-${Date.now()}-${Math.random().toString(36).slice(2)}.db`,
+    );
+    db = openSentinelDb(dbPath);
+    store = new ConversationStore(db);
+  });
+
+  afterEach(() => {
+    db.close();
+    cleanup(dbPath);
+  });
+
+  it("Ridge regression: redirect files a dm_person followup, replies honestly, closes", async () => {
+    const conv = store.open({
+      person_user_id: "U_ALICE",
+      channel: "D_CH1",
+      topic: "project phoenix status",
+      opening_message: "What's the status?",
+    });
+    const llm: LlmClient = {
+      complete: vi.fn().mockResolvedValue(
+        JSON.stringify({
+          action: "file_followup",
+          kind: "dm_person",
+          payload: {
+            target_alias: "ridge",
+            topic: "project phoenix status",
+            question_text: "What's the latest on project phoenix?",
+            context: "Kaleb pointed me your way.",
+          },
+          reply_text: "Got it — I've queued a message to Ridge.",
+          takeaway: "Alice redirected to Ridge; followup queued.",
+        }),
+      ),
+    };
+    const postMessage = vi.fn().mockResolvedValue(undefined);
+    const fileFollowup = vi.fn().mockResolvedValue(undefined);
+    const consumed = await handleConversationReply(
+      makeEvent({ text: "Ask Ridge. Slack him." }),
+      { botUserId: "U_JR" },
+      { store, llm, db, postMessage, fileFollowup, userAliases: { ridge: "U_RIDGE" } },
+    );
+    expect(consumed).toBe(true);
+    expect(postMessage).toHaveBeenCalledWith("D_CH1", "Got it — I've queued a message to Ridge.");
+    expect(fileFollowup).toHaveBeenCalledWith({
+      kind: "dm_person",
+      payload: {
+        target_alias: "ridge",
+        topic: "project phoenix status",
+        question_text: "What's the latest on project phoenix?",
+        context: "Kaleb pointed me your way.",
+      },
+      source: "conversation",
+      sourceRef: String(conv.id),
+      requesterUserId: "U_ALICE",
+    });
+    expect(store.findOpenForPerson("U_ALICE")).toBeNull();
+  });
+
+  it("prompt includes followup instructions and aliases only when fileFollowup dep present", async () => {
+    store.open({ person_user_id: "U_ALICE", channel: "D_CH1", topic: "t", opening_message: "m" });
+    const complete = vi
+      .fn()
+      .mockResolvedValue(JSON.stringify({ action: "close_with_thanks", wrapup: "thanks" }));
+    const llm: LlmClient = { complete };
+    await handleConversationReply(
+      makeEvent(),
+      { botUserId: "U_JR" },
+      {
+        store,
+        llm,
+        db,
+        postMessage: vi.fn().mockResolvedValue(undefined),
+        fileFollowup: vi.fn().mockResolvedValue(undefined),
+        userAliases: { ridge: "U_RIDGE" },
+      },
+    );
+    expect(complete.mock.calls[0][0]).toContain("file_followup");
+    expect(complete.mock.calls[0][0]).toContain("ridge");
+    expect(complete.mock.calls[0][0]).toContain("Never claim you WILL do something");
+  });
+
+  it("prompt omits followup instructions when fileFollowup dep absent", async () => {
+    store.open({ person_user_id: "U_ALICE", channel: "D_CH1", topic: "t", opening_message: "m" });
+    const complete = vi
+      .fn()
+      .mockResolvedValue(JSON.stringify({ action: "close_with_thanks", wrapup: "thanks" }));
+    await handleConversationReply(
+      makeEvent(),
+      { botUserId: "U_JR" },
+      { store, llm: { complete }, db, postMessage: vi.fn().mockResolvedValue(undefined) },
+    );
+    expect(complete.mock.calls[0][0]).not.toContain("file_followup");
+  });
+
+  it("file_followup decision without dep still replies and closes (no crash)", async () => {
+    store.open({ person_user_id: "U_ALICE", channel: "D_CH1", topic: "t", opening_message: "m" });
+    const llm: LlmClient = {
+      complete: vi
+        .fn()
+        .mockResolvedValue(
+          JSON.stringify({
+            action: "file_followup",
+            kind: "note",
+            payload: { text: "x" },
+            reply_text: "Noted.",
+            takeaway: "tk",
+          }),
+        ),
+    };
+    const postMessage = vi.fn().mockResolvedValue(undefined);
+    const consumed = await handleConversationReply(
+      makeEvent(),
+      { botUserId: "U_JR" },
+      { store, llm, db, postMessage },
+    );
+    expect(consumed).toBe(true);
+    expect(postMessage).toHaveBeenCalledWith("D_CH1", "Noted.");
+    expect(store.findOpenForPerson("U_ALICE")).toBeNull();
+  });
+});
