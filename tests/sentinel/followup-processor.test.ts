@@ -163,6 +163,24 @@ describe("FollowupProcessor", () => {
     expect(store.get(id)!.last_error).toContain("slack down");
   });
 
+  it("dm_person: missing dmUser dep stays pending without counting an attempt", async () => {
+    const noDmProcessor = new FollowupProcessor({
+      store,
+      db,
+      conversationStore,
+      userAliases: ALIASES,
+      spawnTask,
+    });
+    const id = store.insert({
+      kind: "dm_person",
+      payload: { target_alias: "ridge", topic: "t", question_text: "q" },
+      source: "conversation",
+    });
+    await noDmProcessor.processPending();
+    expect(store.get(id)!.status).toBe("pending");
+    expect(store.get(id)!.attempts).toBe(0);
+  });
+
   it("malformed dm_person payload is skipped, not retried", async () => {
     const id = store.insert({ kind: "dm_person", payload: { nope: true }, source: "chat" });
     await processor.processPending();
