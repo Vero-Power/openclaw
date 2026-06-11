@@ -19,7 +19,7 @@ describe("sentinel db", () => {
     }
   });
 
-  it("creates all 8 tables on first open", () => {
+  it("creates all 9 tables on first open", () => {
     const db = openSentinelDb(TEST_DB);
     const tables = db
       .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
@@ -33,6 +33,7 @@ describe("sentinel db", () => {
     expect(names).toContain("opportunities");
     expect(names).toContain("reports");
     expect(names).toContain("observer_watermarks");
+    expect(names).toContain("followups");
     db.close();
   });
 
