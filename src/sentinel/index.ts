@@ -18,6 +18,7 @@ import { createSlackChannelsObserver } from "./observers/slack-channels.js";
 import { createWeatherObserver } from "./observers/weather.js";
 import { Reporter } from "./reporter.js";
 import { SentinelScheduler } from "./scheduler.js";
+import { ChannelNameResolver } from "./slack-resolvers.js";
 import { Synthesizer } from "./synthesizer.js";
 
 export interface SentinelDeps {
@@ -29,6 +30,11 @@ export interface SentinelDeps {
         oldest?: string;
         limit?: number;
       }): Promise<{ ok: boolean; messages?: Array<{ user?: string; text?: string; ts?: string }> }>;
+      info(args: { channel: string }): Promise<{
+        ok: boolean;
+        channel?: { id?: string; name?: string; is_archived?: boolean };
+        error?: string;
+      }>;
     };
   };
   allowedSlackChannels: string[];
@@ -44,6 +50,7 @@ export interface Sentinel {
   scheduler: SentinelScheduler;
   db: DatabaseType;
   conversationStore: ConversationStore;
+  channelResolver: ChannelNameResolver;
   runCycleOnce(): Promise<void>;
 }
 
@@ -66,6 +73,7 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
   registry.register(createIndustryContextObserver({ llm: deps.llm }));
 
   const conversationStore = new ConversationStore(db);
+  const channelResolver = new ChannelNameResolver(deps.slackClient);
 
   const synthesizer = new Synthesizer(deps.llm);
   const curator = new Curator(deps.llm);
@@ -84,6 +92,7 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
     userAliases: SLACK_USER_ALIASES,
     dmUser: deps.dmUser,
     conversationStore,
+    channelResolver,
   });
 
   let lastDailyReportDate: string | null = null;
@@ -186,7 +195,7 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
     },
   });
 
-  return { scheduler, db, conversationStore, runCycleOnce };
+  return { scheduler, db, conversationStore, channelResolver, runCycleOnce };
 }
 
 export { SentinelScheduler } from "./scheduler.js";
@@ -199,3 +208,5 @@ export type {
   ConversationReplyCtx,
   ConversationReplyDeps,
 } from "./conversation-handler.js";
+export { ChannelNameResolver } from "./slack-resolvers.js";
+export type { ConversationsInfoClient } from "./slack-resolvers.js";

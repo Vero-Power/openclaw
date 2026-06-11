@@ -18,7 +18,12 @@ import { warn } from "../../globals.js";
 import { installRequestBodyLimitGuard } from "../../infra/http-body.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
-import { createSentinel, ConversationStore, openSentinelDb } from "../../sentinel/index.js";
+import {
+  createSentinel,
+  ConversationStore,
+  openSentinelDb,
+  ChannelNameResolver,
+} from "../../sentinel/index.js";
 import type { LlmClient } from "../../triage/llm-client.js";
 import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client.js";
@@ -282,6 +287,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const sentinelDbPath = join(homedir(), ".openclaw/sentinel.db");
   const sentinelDb = openSentinelDb(sentinelDbPath);
   const conversationStore = new ConversationStore(sentinelDb);
+  const channelResolver = new ChannelNameResolver(app.client);
   const conversationReplyDeps = {
     store: conversationStore,
     llm: sentinelLlmClient,
@@ -290,6 +296,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       await app.client.chat.postMessage({ token: botToken, channel, text });
     },
     kalebUserId: "U07KRVD2867",
+    channelResolver,
   };
 
   registerSlackMonitorEvents({ ctx, account, handleSlackMessage, conversationReplyDeps });

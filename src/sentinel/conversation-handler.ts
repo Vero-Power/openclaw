@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { LlmClient } from "../triage/llm-client.js";
 import type { ConversationStore } from "./conversation-store.js";
 import { detectOptOut } from "./opt-out-detector.js";
+import type { ChannelNameResolver } from "./slack-resolvers.js";
 
 export interface ConversationReplyEvent {
   user: string;
@@ -21,6 +22,17 @@ export interface ConversationReplyDeps {
   db: DatabaseType;
   postMessage: (channel: string, text: string) => Promise<void>;
   kalebUserId?: string;
+  channelResolver?: ChannelNameResolver;
+}
+
+async function enrichTurns(
+  turns: Array<{ sender: string; text: string }>,
+  resolver?: ChannelNameResolver,
+): Promise<Array<{ sender: string; text: string }>> {
+  if (!resolver) {
+    return turns;
+  }
+  return Promise.all(turns.map(async (t) => ({ ...t, text: await resolver.enrichText(t.text) })));
 }
 
 const LlmDecisionSchema = z.discriminatedUnion("action", [
@@ -109,7 +121,8 @@ export async function handleConversationReply(
 
   let decision: LlmDecision;
   try {
-    decision = await decideLlm(deps.llm, conversation.topic, turns);
+    const enrichedTurns = await enrichTurns(turns, deps.channelResolver);
+    decision = await decideLlm(deps.llm, conversation.topic, enrichedTurns);
   } catch {
     // LLM error: leave conversation open, don't crash
     return true;
@@ -117,7 +130,10 @@ export async function handleConversationReply(
 
   if (decision.action === "ask_followup") {
     const followupTs = Date.now();
-    await deps.postMessage(event.channel, decision.question);
+    const question = deps.channelResolver
+      ? await deps.channelResolver.enrichText(decision.question)
+      : decision.question;
+    await deps.postMessage(event.channel, question);
     deps.store.appendTurn(conversation.id, {
       sender: "jr",
       text: decision.question,
@@ -125,7 +141,10 @@ export async function handleConversationReply(
     });
     // conversation stays open
   } else if (decision.action === "close_with_thanks") {
-    await deps.postMessage(event.channel, decision.wrapup);
+    const wrapup = deps.channelResolver
+      ? await deps.channelResolver.enrichText(decision.wrapup)
+      : decision.wrapup;
+    await deps.postMessage(event.channel, wrapup);
     deps.store.appendTurn(conversation.id, {
       sender: "jr",
       text: decision.wrapup,
@@ -135,7 +154,8 @@ export async function handleConversationReply(
   } else if (decision.action === "escalate") {
     deps.store.close(conversation.id, "closed", decision.summary);
     if (deps.kalebUserId) {
-      const msg = `[Escalation from JR inquiry — topic: ${conversation.topic}]\n\n${decision.summary}`;
+      const rawMsg = `[Escalation from JR inquiry — topic: ${conversation.topic}]\n\n${decision.summary}`;
+      const msg = deps.channelResolver ? await deps.channelResolver.enrichText(rawMsg) : rawMsg;
       await deps.postMessage(deps.kalebUserId, msg);
     }
   }

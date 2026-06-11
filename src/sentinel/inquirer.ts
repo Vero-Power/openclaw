@@ -4,6 +4,7 @@ import type { Database as DatabaseType } from "better-sqlite3";
 import { z } from "zod";
 import type { LlmClient } from "../triage/llm-client.js";
 import type { ConversationStore } from "./conversation-store.js";
+import type { ChannelNameResolver } from "./slack-resolvers.js";
 
 const QuestionsOutputSchema = z.object({
   questions: z.array(
@@ -38,6 +39,8 @@ export interface InquirerDeps {
   dmUser?: (userId: string, text: string) => Promise<void>;
   // Phase B: ConversationStore for opening tracked conversations
   conversationStore?: ConversationStore;
+  // Optional resolver — enriches question_text before writing to queue / DM
+  channelResolver?: ChannelNameResolver;
 }
 
 export interface InquirerResult {
@@ -117,12 +120,22 @@ export class Inquirer {
       (q) => allowedUserIds.has(q.target_user_id) && !optedOut.has(q.target_user_id),
     );
 
+    // Enrich question texts for display (queue file + DM). Raw text is kept in
+    // the conversation store so raw IDs are preserved in the DB.
+    const enrichedTexts: string[] = await Promise.all(
+      eligible.map((q) =>
+        this.deps.channelResolver
+          ? this.deps.channelResolver.enrichText(q.question_text)
+          : Promise.resolve(q.question_text),
+      ),
+    );
+
     const queuePath = join(this.deps.libPath, "reports/inquiry-queue.md");
     const now = new Date().toISOString();
     const block = `## Cycle ${now}\n\n${eligible
       .map(
         (q, idx) =>
-          `### Q${idx + 1} — ${q.topic}\n\n**Target:** \`${q.target_user_id}\`\n\n**Question:** ${q.question_text}\n\n**Rationale:** ${q.rationale}\n`,
+          `### Q${idx + 1} — ${q.topic}\n\n**Target:** \`${q.target_user_id}\`\n\n**Question:** ${enrichedTexts[idx] ?? q.question_text}\n\n**Rationale:** ${q.rationale}\n`,
       )
       .join("\n")}\n`;
 
@@ -143,7 +156,11 @@ export class Inquirer {
       this.deps.conversationStore !== undefined;
 
     if (liveMode) {
-      for (const q of eligible) {
+      for (let idx = 0; idx < eligible.length; idx++) {
+        const q = eligible[idx];
+        if (!q) {
+          continue;
+        }
         // Enforce: only one open conversation per person at a time
         const existing = this.deps.conversationStore!.findOpenForPerson(q.target_user_id);
         if (existing) {
@@ -155,7 +172,7 @@ export class Inquirer {
           topic: q.topic,
           opening_message: q.question_text,
         });
-        await this.deps.dmUser!(q.target_user_id, q.question_text);
+        await this.deps.dmUser!(q.target_user_id, enrichedTexts[idx] ?? q.question_text);
       }
     }
 
