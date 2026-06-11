@@ -24,6 +24,7 @@ import {
   openSentinelDb,
   ChannelNameResolver,
 } from "../../sentinel/index.js";
+import { SLACK_USER_ALIASES } from "../../triage/actions/slack/aliases.js";
 import type { LlmClient } from "../../triage/llm-client.js";
 import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client.js";
@@ -35,8 +36,10 @@ import { normalizeAllowList } from "./allow-list.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
+import { fileAndProcessFollowup, followupsEnabled } from "./followup-bridge.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
+import { spawnFollowupTask } from "./triage-bridge.js";
 import type { MonitorSlackOpts } from "./types.js";
 
 function isTextBlock(block: { type: string }): block is TextContent {
@@ -297,6 +300,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     },
     kalebUserId: "U07KRVD2867",
     channelResolver,
+    ...(followupsEnabled()
+      ? {
+          fileFollowup: async (input: Parameters<typeof fileAndProcessFollowup>[1]) => {
+            await fileAndProcessFollowup(ctx, input);
+          },
+          userAliases: SLACK_USER_ALIASES,
+        }
+      : {}),
   };
 
   registerSlackMonitorEvents({ ctx, account, handleSlackMessage, conversationReplyDeps });
@@ -441,6 +452,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       ridgeUserId: undefined, // TODO: fill from config when known
       dmUser: dmUserFn,
       sentinelDbPath,
+      spawnTask: (input) => spawnFollowupTask(input, ctx),
     });
     sentinel.scheduler.start();
     runtime.log?.("[sentinel] scheduler started (interval: 2h, flag: OPENCLAW_SENTINEL_ENABLED)");

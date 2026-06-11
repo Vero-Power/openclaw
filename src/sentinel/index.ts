@@ -6,6 +6,8 @@ import type { LlmClient } from "../triage/llm-client.js";
 import { ConversationStore } from "./conversation-store.js";
 import { Curator } from "./curator.js";
 import { openSentinelDb } from "./db.js";
+import { FollowupProcessor, type SpawnTaskInput } from "./followup-processor.js";
+import { FollowupStore } from "./followup-store.js";
 import { Inquirer } from "./inquirer.js";
 import { ensureLibrarySkeleton, regenerateIndex } from "./library.js";
 import { Monetizer } from "./monetizer.js";
@@ -44,6 +46,7 @@ export interface SentinelDeps {
   dmUser?: (userId: string, text: string) => Promise<void>;
   libPath?: string;
   sentinelDbPath?: string;
+  spawnTask?: (input: SpawnTaskInput) => Promise<void>;
 }
 
 export interface Sentinel {
@@ -74,6 +77,16 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
 
   const conversationStore = new ConversationStore(db);
   const channelResolver = new ChannelNameResolver(deps.slackClient);
+  const followupStore = new FollowupStore(db);
+  const followupProcessor = new FollowupProcessor({
+    store: followupStore,
+    db,
+    conversationStore,
+    userAliases: SLACK_USER_ALIASES,
+    dmUser: deps.dmUser,
+    channelResolver,
+    spawnTask: deps.spawnTask,
+  });
 
   const synthesizer = new Synthesizer(deps.llm);
   const curator = new Curator(deps.llm);
@@ -102,6 +115,11 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
   async function runCycleOnce(): Promise<void> {
     // 0. Expire stale conversations (idle > 3 days → dropped)
     conversationStore.expireStale(3 * 24 * 60 * 60 * 1000);
+
+    // 0.5 Drain pending follow-ups (collisions from earlier cycles, transient failures)
+    if (process.env.OPENCLAW_FOLLOWUPS === "1") {
+      await followupProcessor.processPending();
+    }
 
     // 1. Observe
     const runResult = await runObservers({ registry, db });

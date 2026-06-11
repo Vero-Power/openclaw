@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { completeSimple, getEnvApiKey, getModel, type TextContent } from "@mariozechner/pi-ai";
+import type { SpawnTaskInput } from "../../sentinel/followup-processor.js";
 import type { SlackClientLike } from "../../triage/actions/index.js";
 import { SLACK_USER_ALIASES } from "../../triage/actions/slack/aliases.js";
 import {
@@ -17,6 +18,7 @@ import type { LlmClient } from "../../triage/llm-client.js";
 import type { Plan } from "../../triage/types.js";
 import type { SlackMessageEvent } from "../types.js";
 import type { SlackMonitorContext } from "./context.js";
+import { fileAndProcessFollowup, followupsEnabled } from "./followup-bridge.js";
 
 function isTextBlock(block: { type: string }): block is TextContent {
   return block.type === "text";
@@ -120,26 +122,7 @@ export async function runTriagePipeline(
   if (!c.is_task) {
     // Not a task — cancel the session and route to chat-v2 (reasoner + responder)
     getStore().transition(session.request_id, "CANCELLED");
-    const isDm = event.channel?.startsWith("D") ?? false;
-    await handleChatMessage(
-      {
-        userMessage: event.text ?? "",
-        channel: event.channel,
-        threadTs: event.thread_ts ?? event.ts,
-        isDm,
-      },
-      {
-        llm: llmClient,
-        slackPost: async (params) => {
-          await ctx.app.client.chat.postMessage({
-            token: ctx.botToken,
-            channel: params.channel,
-            thread_ts: params.thread_ts,
-            text: params.text,
-          });
-        },
-      },
-    );
+    await routeToChat(event, ctx);
     return true;
   }
 
@@ -159,26 +142,7 @@ export async function runTriagePipeline(
       `[triage] planner error — cancelling session ${session.request_id} and falling back to chat-v2: ${String(planErr)}`,
     );
     getStore().transition(session.request_id, "CANCELLED");
-    const isDm = event.channel?.startsWith("D") ?? false;
-    await handleChatMessage(
-      {
-        userMessage: event.text ?? "",
-        channel: event.channel,
-        threadTs: event.thread_ts ?? event.ts,
-        isDm,
-      },
-      {
-        llm: llmClient,
-        slackPost: async (params) => {
-          await ctx.app.client.chat.postMessage({
-            token: ctx.botToken,
-            channel: params.channel,
-            thread_ts: params.thread_ts,
-            text: params.text,
-          });
-        },
-      },
-    );
+    await routeToChat(event, ctx);
     return true;
   }
 
@@ -189,26 +153,7 @@ export async function runTriagePipeline(
       `[triage] empty plan from planner — request is informational, falling back to chat-v2 for session ${session.request_id}`,
     );
     getStore().transition(session.request_id, "CANCELLED");
-    const isDm = event.channel?.startsWith("D") ?? false;
-    await handleChatMessage(
-      {
-        userMessage: event.text ?? "",
-        channel: event.channel,
-        threadTs: event.thread_ts ?? event.ts,
-        isDm,
-      },
-      {
-        llm: llmClient,
-        slackPost: async (params) => {
-          await ctx.app.client.chat.postMessage({
-            token: ctx.botToken,
-            channel: params.channel,
-            thread_ts: params.thread_ts,
-            text: params.text,
-          });
-        },
-      },
-    );
+    await routeToChat(event, ctx);
     return true;
   }
 
@@ -325,6 +270,46 @@ export async function handleThreadReplyForActiveTriage(
   return true;
 }
 
+async function routeToChat(event: SlackMessageEvent, ctx: SlackMonitorContext): Promise<void> {
+  const isDm = event.channel?.startsWith("D") ?? false;
+  await handleChatMessage(
+    {
+      userMessage: event.text ?? "",
+      channel: event.channel,
+      threadTs: event.thread_ts ?? event.ts,
+      isDm,
+      requesterUserId: event.user,
+    },
+    {
+      llm: llmClient,
+      slackPost: async (params) => {
+        await ctx.app.client.chat.postMessage({
+          token: ctx.botToken,
+          channel: params.channel,
+          thread_ts: params.thread_ts,
+          text: params.text,
+        });
+      },
+      ...(followupsEnabled()
+        ? {
+            fileFollowup: (f: {
+              kind: "dm_person" | "note" | "task";
+              payload: Record<string, unknown>;
+            }) =>
+              fileAndProcessFollowup(ctx, {
+                kind: f.kind,
+                payload: f.payload,
+                source: "chat",
+                sourceRef: `${event.channel}:${event.ts ?? ""}`,
+                requesterUserId: event.user,
+              }),
+            followupAliases: Object.keys(SLACK_USER_ALIASES),
+          }
+        : {}),
+    },
+  );
+}
+
 function renderPlanForApproval(plan: Plan): string {
   const lines = [
     `📋 *Plan:* _${plan.summary}_ (confidence ${Math.round(plan.confidence * 100)}%)`,
@@ -335,4 +320,38 @@ function renderPlanForApproval(plan: Plan): string {
   });
   lines.push("", "Reply *yes* / *go* to approve, *no* / *cancel* to abort, or describe an edit.");
   return lines.join("\n");
+}
+
+/**
+ * Spawn a triage session for a queued `task` follow-up. Opens a DM with the requester,
+ * posts an anchor message, then runs the normal triage pipeline with the anchor ts as
+ * the thread root — so plan approval ("yes" in the thread) reuses the existing
+ * handleThreadReplyForActiveTriage flow unchanged.
+ */
+export async function spawnFollowupTask(
+  input: SpawnTaskInput,
+  ctx: SlackMonitorContext,
+): Promise<void> {
+  const opened = await ctx.app.client.conversations.open({
+    token: ctx.botToken,
+    users: input.requesterUserId,
+  });
+  const channel = (opened as { channel?: { id?: string } }).channel?.id;
+  if (!channel) {
+    throw new Error(`could not open DM with ${input.requesterUserId}`);
+  }
+  const introText = `Following up on your earlier request${input.context ? ` (${input.context})` : ""}: *${input.taskText}*\nWorking on a plan — I'll post it in this thread.`;
+  const intro = await ctx.app.client.chat.postMessage({
+    token: ctx.botToken,
+    channel,
+    text: introText,
+  });
+  const syntheticEvent: SlackMessageEvent = {
+    type: "message",
+    channel,
+    user: input.requesterUserId,
+    text: input.taskText,
+    ts: intro.ts ?? String(Date.now() / 1000),
+  };
+  await runTriagePipeline(syntheticEvent, ctx);
 }
