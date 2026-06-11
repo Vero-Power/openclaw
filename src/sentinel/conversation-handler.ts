@@ -73,15 +73,20 @@ Given the conversation history and the latest reply, decide what to do next:
 - If the reply reveals something urgent (broken process, incident, blocker) that Kaleb should know: return {"action":"escalate","summary":"<concise escalation summary>"}`;
 
 function buildFollowupPromptBlock(userAliases: Record<string, string> | undefined): string {
-  const aliasList = Object.keys(userAliases ?? {}).join(", ") || "(none)";
+  const aliasList = Object.keys(userAliases ?? {}).join(", ");
+  const kinds = aliasList ? `"dm_person"|"note"|"task"` : `"note"|"task"`;
+  const dmShape = aliasList
+    ? `\n  - dm_person: {"target_alias":"<one of: ${aliasList}>","topic":"...","question_text":"<the question to DM them>","context":"<one-line handoff, e.g. 'Kaleb pointed me your way about X'>"}`
+    : "";
+  const dmRule = aliasList
+    ? `\n  For dm_person, the target_alias MUST be one of: ${aliasList}. If the person they name is not in that list, use kind "note" instead.`
+    : "";
   return `
 - If the person asks you to do something later — message someone else ("ask Ridge"), look into something, or perform a task — return:
-  {"action":"file_followup","kind":"dm_person"|"note"|"task","payload":{...},"reply_text":"<honest reply that says you've queued it>","takeaway":"<what you learned + what was queued>"}
-  Payload shapes:
-  - dm_person: {"target_alias":"<one of: ${aliasList}>","topic":"...","question_text":"<the question to DM them>","context":"<one-line handoff, e.g. 'Kaleb pointed me your way about X'>"}
+  {"action":"file_followup","kind":${kinds},"payload":{...},"reply_text":"<honest reply that says you've queued it>","takeaway":"<what you learned + what was queued>"}
+  Payload shapes:${dmShape}
   - note: {"text":"<what to surface in the daily report>"}
-  - task: {"task_text":"<the task in plain words>","context":"<brief background>"}
-  For dm_person, the target_alias MUST be one of: ${aliasList}. If the person they name is not in that list, use kind "note" instead.
+  - task: {"task_text":"<the task in plain words>","context":"<brief background>"}${dmRule}
 
 HONESTY RULE: Never claim you WILL do something in the future. Either file_followup now (then reply_text says "I've queued it") or say you can't. Promises without a filed follow-up are forbidden.`;
 }
@@ -196,25 +201,36 @@ export async function handleConversationReply(
       await deps.postMessage(deps.kalebUserId, msg);
     }
   } else if (decision.action === "file_followup") {
+    // File BEFORE replying so reply_text ("I've queued it") is never a false claim.
+    let filed = true;
+    if (deps.fileFollowup) {
+      try {
+        await deps.fileFollowup({
+          kind: decision.kind,
+          payload: decision.payload,
+          source: "conversation",
+          sourceRef: String(conversation.id),
+          requesterUserId: event.user,
+        });
+      } catch (err) {
+        filed = false;
+        // eslint-disable-next-line no-console
+        console.error("[sentinel] fileFollowup failed:", (err as Error).message);
+      }
+    }
+    const replyText = filed
+      ? decision.reply_text
+      : "I tried to queue that follow-up but it failed on my end, so I can't promise it right now.";
     const reply = deps.channelResolver
-      ? await deps.channelResolver.enrichText(decision.reply_text)
-      : decision.reply_text;
+      ? await deps.channelResolver.enrichText(replyText)
+      : replyText;
     await deps.postMessage(event.channel, reply);
     deps.store.appendTurn(conversation.id, {
       sender: "jr",
-      text: decision.reply_text,
+      text: replyText,
       ts: Date.now(),
     });
     deps.store.close(conversation.id, "closed", decision.takeaway);
-    if (deps.fileFollowup) {
-      await deps.fileFollowup({
-        kind: decision.kind,
-        payload: decision.payload,
-        source: "conversation",
-        sourceRef: String(conversation.id),
-        requesterUserId: event.user,
-      });
-    }
   }
 
   return true;

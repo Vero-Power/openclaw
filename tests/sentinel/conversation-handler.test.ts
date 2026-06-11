@@ -406,17 +406,15 @@ describe("file_followup decision", () => {
   it("file_followup decision without dep still replies and closes (no crash)", async () => {
     store.open({ person_user_id: "U_ALICE", channel: "D_CH1", topic: "t", opening_message: "m" });
     const llm: LlmClient = {
-      complete: vi
-        .fn()
-        .mockResolvedValue(
-          JSON.stringify({
-            action: "file_followup",
-            kind: "note",
-            payload: { text: "x" },
-            reply_text: "Noted.",
-            takeaway: "tk",
-          }),
-        ),
+      complete: vi.fn().mockResolvedValue(
+        JSON.stringify({
+          action: "file_followup",
+          kind: "note",
+          payload: { text: "x" },
+          reply_text: "Noted.",
+          takeaway: "tk",
+        }),
+      ),
     };
     const postMessage = vi.fn().mockResolvedValue(undefined);
     const consumed = await handleConversationReply(
@@ -427,5 +425,53 @@ describe("file_followup decision", () => {
     expect(consumed).toBe(true);
     expect(postMessage).toHaveBeenCalledWith("D_CH1", "Noted.");
     expect(store.findOpenForPerson("U_ALICE")).toBeNull();
+  });
+
+  it("filing failure: replies honestly that nothing was queued, still closes", async () => {
+    store.open({ person_user_id: "U_ALICE", channel: "D_CH1", topic: "t", opening_message: "m" });
+    const llm: LlmClient = {
+      complete: vi.fn().mockResolvedValue(
+        JSON.stringify({
+          action: "file_followup",
+          kind: "note",
+          payload: { text: "x" },
+          reply_text: "I've queued it.",
+          takeaway: "tk",
+        }),
+      ),
+    };
+    const postMessage = vi.fn().mockResolvedValue(undefined);
+    const fileFollowup = vi.fn().mockRejectedValue(new Error("db locked"));
+    const consumed = await handleConversationReply(
+      makeEvent(),
+      { botUserId: "U_JR" },
+      { store, llm, db, postMessage, fileFollowup },
+    );
+    expect(consumed).toBe(true);
+    const reply = postMessage.mock.calls[0][1] as string;
+    expect(reply).not.toContain("queued it");
+    expect(reply).toContain("failed");
+    expect(store.findOpenForPerson("U_ALICE")).toBeNull();
+  });
+
+  it("prompt omits dm_person when no aliases are configured", async () => {
+    store.open({ person_user_id: "U_ALICE", channel: "D_CH1", topic: "t", opening_message: "m" });
+    const complete = vi
+      .fn()
+      .mockResolvedValue(JSON.stringify({ action: "close_with_thanks", wrapup: "thanks" }));
+    await handleConversationReply(
+      makeEvent(),
+      { botUserId: "U_JR" },
+      {
+        store,
+        llm: { complete },
+        db,
+        postMessage: vi.fn().mockResolvedValue(undefined),
+        fileFollowup: vi.fn().mockResolvedValue(undefined),
+      },
+    );
+    const prompt = complete.mock.calls[0][0] as string;
+    expect(prompt).toContain("file_followup");
+    expect(prompt).not.toContain("dm_person");
   });
 });
