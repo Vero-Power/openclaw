@@ -58,14 +58,22 @@ export class Responder {
     userMessage: string;
     findings: string;
     persona: string;
+    queuedActions?: string[];
+    failedToQueue?: boolean;
   }): Promise<string> {
+    const queuedBlock =
+      input.queuedActions && input.queuedActions.length > 0
+        ? `\nFollow-ups ALREADY QUEUED on the user's behalf (mention them accurately — they WILL happen):\n${input.queuedActions.map((a) => `- ${a}`).join("\n")}\n`
+        : input.failedToQueue
+          ? `\nIMPORTANT: the user asked for a follow-up but NOTHING was queued (filing failed). Say so honestly — do NOT claim anything was queued or promise future action.\n`
+          : "";
     const prompt = `You are JR. Your personality:
 ${input.persona}
 
-A private reasoner has analyzed the user's message. Use the findings to produce ONE Slack reply.
+An internal analysis of the user's message has been prepared. Use the findings to produce ONE Slack reply.
 
 Findings: ${input.findings}
-
+${queuedBlock}
 User message: ${JSON.stringify(input.userMessage)}
 
 OUTPUT FORMAT — read carefully:
@@ -74,6 +82,7 @@ OUTPUT FORMAT — read carefully:
 - NO markdown code fences (no triple backticks).
 - NO commentary, reasoning trace, or explanation outside the JSON.
 - Reply text is ONE Slack message in character. Stay terse. No multi-paragraph essays unless the question genuinely demands it.
+- Never promise future actions beyond the queued follow-ups listed above.
 
 Bad outputs (DO NOT do these):
   <think>...</think>{"reply":"..."}
