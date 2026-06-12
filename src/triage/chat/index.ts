@@ -34,7 +34,7 @@ export async function handleChatMessage(
     channel: string;
     threadTs?: string;
     isDm: boolean;
-    recentThread?: string[];
+    convoContext?: { full: string; history: string };
     requesterUserId?: string;
   },
   deps: ChatHandlerDeps,
@@ -44,6 +44,7 @@ export async function handleChatMessage(
 
   const reasoned = await reasoner.reason({
     userMessage: input.userMessage,
+    contextBlock: input.convoContext?.full,
     followups: deps.fileFollowup ? { knownAliases: deps.followupAliases ?? [] } : undefined,
   });
 
@@ -71,6 +72,7 @@ export async function handleChatMessage(
     persona: loadPersona(),
     queuedActions,
     failedToQueue,
+    conversationHistory: input.convoContext?.history,
   });
 
   await deps.slackPost({

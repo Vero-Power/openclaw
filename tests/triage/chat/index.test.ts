@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { handleChatMessage } from "../../../src/triage/chat/index.js";
 import type { ChatHandlerDeps } from "../../../src/triage/chat/index.js";
 import type { LlmClient } from "../../../src/triage/llm-client.js";
@@ -125,5 +125,26 @@ describe("handleChatMessage", () => {
 
     expect(posts).toHaveLength(1);
     expect(posts[0].text).toContain("trouble");
+  });
+
+  it("passes convoContext.full to the reasoner and .history to the responder", async () => {
+    const calls: string[] = [];
+    const complete = vi.fn().mockImplementation(async (prompt: string) => {
+      calls.push(prompt);
+      return calls.length === 1 ? '{"findings": "f", "confidence": 0.9}' : '{"reply": "ok"}';
+    });
+    const slackPost = vi.fn().mockResolvedValue(undefined);
+    await handleChatMessage(
+      {
+        userMessage: "did you send it?",
+        channel: "D1",
+        isDm: true,
+        convoContext: { full: "FULL-BLOCK-MARKER", history: "HISTORY-ONLY-MARKER" },
+      },
+      { llm: { complete }, slackPost },
+    );
+    expect(calls[0]).toContain("FULL-BLOCK-MARKER"); // reasoner gets full
+    expect(calls[1]).toContain("HISTORY-ONLY-MARKER"); // responder gets history
+    expect(calls[1]).not.toContain("FULL-BLOCK-MARKER");
   });
 });
