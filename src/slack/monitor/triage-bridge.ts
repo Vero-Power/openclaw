@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { completeSimple, getEnvApiKey, getModel, type TextContent } from "@mariozechner/pi-ai";
+import { openSentinelDb } from "../../sentinel/db.js";
 import type { SpawnTaskInput } from "../../sentinel/followup-processor.js";
 import type { SlackClientLike } from "../../triage/actions/index.js";
 import { SLACK_USER_ALIASES } from "../../triage/actions/slack/aliases.js";
@@ -18,6 +19,11 @@ import type { LlmClient } from "../../triage/llm-client.js";
 import type { Plan } from "../../triage/types.js";
 import type { SlackMessageEvent } from "../types.js";
 import type { SlackMonitorContext } from "./context.js";
+import {
+  ConversationContextBuilder,
+  convoContextEnabled,
+  type ConversationContext,
+} from "./conversation-context.js";
 import { fileAndProcessFollowup, followupsEnabled } from "./followup-bridge.js";
 
 function isTextBlock(block: { type: string }): block is TextContent {
@@ -60,6 +66,7 @@ let lazyStore: SessionStore | null = null;
 let lazyRegistry: ReturnType<typeof bootstrapActionCatalog> | null = null;
 let lazyClassifier: Classifier | null = null;
 let lazyPlanner: Planner | null = null;
+let lazyContextBuilder: ConversationContextBuilder | null = null;
 
 const STALE_SESSION_IDLE_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -95,6 +102,46 @@ function getPlanner(): Planner {
   return lazyPlanner;
 }
 
+function getContextBuilder(ctx: SlackMonitorContext): ConversationContextBuilder {
+  if (!lazyContextBuilder) {
+    lazyContextBuilder = new ConversationContextBuilder({
+      client: {
+        conversations: {
+          history: (args) => ctx.app.client.conversations.history(args),
+          replies: (args) => ctx.app.client.conversations.replies(args),
+        },
+      },
+      botToken: ctx.botToken,
+      botUserId: ctx.botUserId,
+      resolveUserName: (userId) => ctx.resolveUserName(userId),
+      db: openSentinelDb(join(homedir(), ".openclaw/sentinel.db")),
+    });
+  }
+  return lazyContextBuilder;
+}
+
+const EMPTY_CONTEXT: ConversationContext = { full: "", history: "" };
+
+async function buildConvoContext(
+  event: SlackMessageEvent,
+  ctx: SlackMonitorContext,
+): Promise<ConversationContext> {
+  if (!convoContextEnabled()) {
+    return EMPTY_CONTEXT;
+  }
+  try {
+    return await getContextBuilder(ctx).build({
+      channel: event.channel,
+      threadTs: event.thread_ts,
+      userId: event.user ?? "",
+      excludeTs: event.ts,
+    });
+  } catch (err) {
+    ctx.runtime.log(`[context] build failed: ${String(err)}`);
+    return EMPTY_CONTEXT;
+  }
+}
+
 /**
  * @returns true always — either the triage pipeline consumed the message (plan posted, awaiting
  *          approval) or chat-v2 handled it (reasoner+responder reply posted). Never falls through.
@@ -115,14 +162,15 @@ export async function runTriagePipeline(
     requester_message: event.text ?? "",
   });
 
-  const c = await getClassifier().classify(event.text ?? "");
+  const convoContext = await buildConvoContext(event, ctx);
+  const c = await getClassifier().classify(event.text ?? "", convoContext.full || undefined);
   getStore().setClassifierOutput(session.request_id, c);
   getStore().transition(session.request_id, "CLASSIFIED");
 
   if (!c.is_task) {
     // Not a task — cancel the session and route to chat-v2 (reasoner + responder)
     getStore().transition(session.request_id, "CANCELLED");
-    await routeToChat(event, ctx);
+    await routeToChat(event, ctx, convoContext);
     return true;
   }
 
@@ -134,7 +182,7 @@ export async function runTriagePipeline(
 
   let plan: Plan;
   try {
-    plan = await getPlanner().plan(event.text ?? "");
+    plan = await getPlanner().plan(event.text ?? "", convoContext.full || undefined);
   } catch (planErr) {
     // F-A: planner failed (e.g. produced an unknown action, invalid args, unparseable JSON).
     // Cancel the session and fall through to chat-v2 so the user gets a coherent response.
@@ -142,7 +190,7 @@ export async function runTriagePipeline(
       `[triage] planner error — cancelling session ${session.request_id} and falling back to chat-v2: ${String(planErr)}`,
     );
     getStore().transition(session.request_id, "CANCELLED");
-    await routeToChat(event, ctx);
+    await routeToChat(event, ctx, convoContext);
     return true;
   }
 
@@ -153,7 +201,7 @@ export async function runTriagePipeline(
       `[triage] empty plan from planner — request is informational, falling back to chat-v2 for session ${session.request_id}`,
     );
     getStore().transition(session.request_id, "CANCELLED");
-    await routeToChat(event, ctx);
+    await routeToChat(event, ctx, convoContext);
     return true;
   }
 
@@ -244,10 +292,12 @@ export async function handleThreadReplyForActiveTriage(
     });
   } else if (signal.kind === "edit") {
     getStore().transition(active.request_id, "EDITING");
+    const convoContext = await buildConvoContext(event, ctx);
     const newPlan = await getPlanner().replan(
       active.requester_message,
       active.final_plan!,
       signal.edit_text,
+      convoContext.full || undefined,
     );
     const diff = getPlanner().renderDiff(active.final_plan!, newPlan);
     if (active.progress_ts) {
@@ -270,7 +320,11 @@ export async function handleThreadReplyForActiveTriage(
   return true;
 }
 
-async function routeToChat(event: SlackMessageEvent, ctx: SlackMonitorContext): Promise<void> {
+async function routeToChat(
+  event: SlackMessageEvent,
+  ctx: SlackMonitorContext,
+  convoContext?: ConversationContext,
+): Promise<void> {
   const isDm = event.channel?.startsWith("D") ?? false;
   await handleChatMessage(
     {
@@ -279,6 +333,7 @@ async function routeToChat(event: SlackMessageEvent, ctx: SlackMonitorContext): 
       threadTs: event.thread_ts ?? event.ts,
       isDm,
       requesterUserId: event.user,
+      convoContext: convoContext && convoContext.full !== "" ? convoContext : undefined,
     },
     {
       llm: llmClient,
