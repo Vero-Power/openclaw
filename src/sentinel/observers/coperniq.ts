@@ -82,6 +82,38 @@ function computeDeltas(
   return out;
 }
 
+function pluralize(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+function composeSummary(opts: {
+  projectsTotal: number;
+  woTotal: number;
+  projectsChanged: number;
+  wosChanged: number;
+  deltas: Record<string, number>;
+  isFirstRun: boolean;
+}): string {
+  const head = `${pluralize(opts.projectsTotal, "project")}, ${pluralize(opts.woTotal, "work order")}.`;
+  if (opts.isFirstRun) {
+    return head;
+  }
+  const nonzero = Object.entries(opts.deltas)
+    .filter(([, v]) => v !== 0)
+    .toSorted((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+    .slice(0, 4)
+    .map(([k, v]) => {
+      const sign = v > 0 ? "+" : "−";
+      const label = k.replace(/^delta_(project|wo)_status_/, "");
+      return `${sign}${Math.abs(v)} ${label}`;
+    });
+  const changedPhrase = `${opts.projectsChanged} projects and ${opts.wosChanged} work orders changed since last sync`;
+  if (nonzero.length === 0) {
+    return `${head} ${changedPhrase}.`;
+  }
+  return `${head} ${changedPhrase} (${nonzero.join(", ")}).`;
+}
+
 function readPriorObservation(db: DatabaseType): PriorObservation | null {
   const row = db
     .prepare(`SELECT data FROM observations WHERE source = 'coperniq' ORDER BY id DESC LIMIT 1`)
@@ -154,7 +186,16 @@ export function createCoperniqObserver(deps: CoperniqObserverDeps): Observer {
           source: "coperniq",
           topic: "coperniq-ops",
           timestamp: Date.now(),
-          summary: `${projectRows.length} projects, ${woRows.length} work orders.`,
+          summary: composeSummary({
+            projectsTotal: projectRows.length,
+            woTotal: woRows.length,
+            projectsChanged: changedProjects.length,
+            wosChanged: changedWorkOrders.length,
+            deltas: Object.fromEntries(
+              Object.entries(metrics).filter(([k]) => k.startsWith("delta_")),
+            ) as Record<string, number>,
+            isFirstRun: prior === null,
+          }),
           data: {
             lastSyncAt: meta?.lastSyncAt ?? null,
             projectStatusCounts,

@@ -339,3 +339,105 @@ describe("createCoperniqObserver — changed-doc detail", () => {
     expect(out[0].metrics).toMatchObject({ projects_changed: 0, wos_changed: 0 });
   });
 });
+
+describe("createCoperniqObserver — summary text", () => {
+  let dbPath: string;
+  let db: DatabaseType;
+
+  beforeEach(() => {
+    dbPath = tmpSentinelDb();
+    db = openSentinelDb(dbPath);
+  });
+  afterEach(() => {
+    db.close();
+    cleanupDb(dbPath);
+  });
+
+  it("composes a human-readable summary with totals and a delta phrase when deltas exist", async () => {
+    db.prepare(
+      `INSERT INTO observations (source, topic, timestamp, summary, data, metrics, created_at) VALUES (?,?,?,?,?,?,?)`,
+    ).run(
+      "coperniq",
+      "coperniq-ops",
+      Date.now() - 1000,
+      "prior",
+      JSON.stringify({
+        lastSyncAt: "2026-06-17T10:00:00.000Z",
+        projectStatusCounts: { in_progress: 2 },
+        woStatusCounts: { done: 10, assigned: 5 },
+      }),
+      JSON.stringify({}),
+      Date.now() - 1000,
+    );
+
+    const client = makeFakeClient({
+      getSyncMeta: async () => ({ lastSyncAt: "2026-06-17T12:00:00.000Z" }),
+      listProjectStatuses: async () => [
+        { id: "p1", status: "in_progress" },
+        { id: "p2", status: "in_progress" },
+        { id: "p3", status: "complete" },
+      ],
+      listWorkOrderStatuses: async () => [
+        ...Array.from({ length: 12 }, (_, i) => ({ id: `d${i}`, status: "done" })),
+        ...Array.from({ length: 3 }, (_, i) => ({ id: `a${i}`, status: "assigned" })),
+      ],
+    });
+
+    const obs = createCoperniqObserver({ db, getClient: async () => client });
+    const out = await obs.observe(0);
+
+    expect(out[0].summary).toContain("3 projects");
+    expect(out[0].summary).toContain("15 work orders");
+    expect(out[0].summary).toMatch(/(\+|−|-)\d+/);
+  });
+
+  it("first-run summary has no delta phrase", async () => {
+    const client = makeFakeClient({
+      getSyncMeta: async () => ({ lastSyncAt: "2026-06-17T12:00:00.000Z" }),
+      listProjectStatuses: async () => [{ id: "p1", status: "complete" }],
+      listWorkOrderStatuses: async () => [],
+    });
+    const obs = createCoperniqObserver({ db, getClient: async () => client });
+    const out = await obs.observe(0);
+    expect(out[0].summary).toMatch(/^1 project/);
+    expect(out[0].summary).not.toMatch(/since last/i);
+  });
+});
+
+describe("createCoperniqObserver — error propagation", () => {
+  let dbPath: string;
+  let db: DatabaseType;
+
+  beforeEach(() => {
+    dbPath = tmpSentinelDb();
+    db = openSentinelDb(dbPath);
+  });
+  afterEach(() => {
+    db.close();
+    cleanupDb(dbPath);
+  });
+
+  it("throws when getClient throws", async () => {
+    const obs = createCoperniqObserver({
+      db,
+      getClient: async () => {
+        throw new Error("client init failed");
+      },
+    });
+    await expect(obs.observe(0)).rejects.toThrow(/client init failed/);
+  });
+
+  it("throws when a collection read throws", async () => {
+    const obs = createCoperniqObserver({
+      db,
+      getClient: async () =>
+        makeFakeClient({
+          getSyncMeta: async () => ({ lastSyncAt: "x" }),
+          listProjectStatuses: async () => {
+            throw new Error("firestore boom");
+          },
+        }),
+    });
+    await expect(obs.observe(0)).rejects.toThrow(/firestore boom/);
+  });
+});
