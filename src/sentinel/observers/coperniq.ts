@@ -2,12 +2,6 @@ import type { Database as DatabaseType } from "better-sqlite3";
 import type { Observer } from "../observer.js";
 import type { Observation } from "../types.js";
 
-export interface FirestoreCredentials {
-  client_email: string;
-  private_key: string;
-  project_id: string;
-}
-
 export interface ProjectStatusRow {
   id: string;
   status: string | null;
