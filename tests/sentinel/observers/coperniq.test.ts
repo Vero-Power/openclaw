@@ -269,3 +269,73 @@ describe("createCoperniqObserver — deltas", () => {
     expect(metricKeys.some((k) => k.startsWith("delta_"))).toBe(false);
   });
 });
+
+describe("createCoperniqObserver — changed-doc detail", () => {
+  let dbPath: string;
+  let db: DatabaseType;
+
+  beforeEach(() => {
+    dbPath = tmpSentinelDb();
+    db = openSentinelDb(dbPath);
+  });
+
+  afterEach(() => {
+    db.close();
+    cleanupDb(dbPath);
+  });
+
+  it("queries listChangedProjects/WorkOrders with sinceIso derived from `since`, cap 50", async () => {
+    const sinceMs = Date.UTC(2026, 5, 16, 0, 0, 0); // 2026-06-16T00:00:00.000Z
+    let projectQueryArgs: { sinceIso: string; limit: number } | null = null;
+    let woQueryArgs: { sinceIso: string; limit: number } | null = null;
+
+    const client = makeFakeClient({
+      getSyncMeta: async () => ({ lastSyncAt: "2026-06-17T12:00:00.000Z" }),
+      listProjectStatuses: async () => [],
+      listWorkOrderStatuses: async () => [],
+      listChangedProjects: async (sinceIso, limit) => {
+        projectQueryArgs = { sinceIso, limit };
+        return [
+          { id: "p1", status: "complete", title: "Doe roof" },
+          { id: "p2", status: "in_progress", title: "Smith roof" },
+        ];
+      },
+      listChangedWorkOrders: async (sinceIso, limit) => {
+        woQueryArgs = { sinceIso, limit };
+        return [{ id: "w1", status: "done", title: "Install crew dispatch" }];
+      },
+    });
+
+    const obs = createCoperniqObserver({ db, getClient: async () => client });
+    const out = await obs.observe(sinceMs);
+
+    expect(projectQueryArgs).toEqual({ sinceIso: "2026-06-16T00:00:00.000Z", limit: 50 });
+    expect(woQueryArgs).toEqual({ sinceIso: "2026-06-16T00:00:00.000Z", limit: 50 });
+
+    const data = out[0].data as { changedProjects: unknown[]; changedWorkOrders: unknown[] };
+    expect(data.changedProjects).toHaveLength(2);
+    expect(data.changedWorkOrders).toHaveLength(1);
+    expect(out[0].metrics).toMatchObject({ projects_changed: 2, wos_changed: 1 });
+  });
+
+  it("does not call listChanged* when since=0 (first observation ever)", async () => {
+    let called = false;
+    const client = makeFakeClient({
+      getSyncMeta: async () => ({ lastSyncAt: "2026-06-17T12:00:00.000Z" }),
+      listProjectStatuses: async () => [],
+      listWorkOrderStatuses: async () => [],
+      listChangedProjects: async () => {
+        called = true;
+        return [];
+      },
+      listChangedWorkOrders: async () => {
+        called = true;
+        return [];
+      },
+    });
+    const obs = createCoperniqObserver({ db, getClient: async () => client });
+    const out = await obs.observe(0);
+    expect(called).toBe(false);
+    expect(out[0].metrics).toMatchObject({ projects_changed: 0, wos_changed: 0 });
+  });
+});

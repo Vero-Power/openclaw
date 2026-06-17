@@ -104,7 +104,7 @@ function readPriorObservation(db: DatabaseType): PriorObservation | null {
 export function createCoperniqObserver(deps: CoperniqObserverDeps): Observer {
   return {
     name: "coperniq",
-    async observe(_since: number): Promise<Omit<Observation, "id" | "created_at">[]> {
+    async observe(since: number): Promise<Omit<Observation, "id" | "created_at">[]> {
       const getClient =
         deps.getClient ??
         (async () => {
@@ -121,12 +121,22 @@ export function createCoperniqObserver(deps: CoperniqObserverDeps): Observer {
       const projectRows = await client.listProjectStatuses();
       const woRows = await client.listWorkOrderStatuses();
 
+      let changedProjects: ProjectStatusRow[] = [];
+      let changedWorkOrders: WorkOrderStatusRow[] = [];
+      if (since > 0) {
+        const sinceIso = new Date(since).toISOString();
+        changedProjects = await client.listChangedProjects(sinceIso, 50);
+        changedWorkOrders = await client.listChangedWorkOrders(sinceIso, 50);
+      }
+
       const projectStatusCounts = tallyByStatus(projectRows);
       const woStatusCounts = tallyByStatus(woRows);
 
       const metrics: Record<string, number> = {
         projects_total: projectRows.length,
         work_orders_total: woRows.length,
+        projects_changed: changedProjects.length,
+        wos_changed: changedWorkOrders.length,
         ...flattenCounts("project_status", projectStatusCounts),
         ...flattenCounts("wo_status", woStatusCounts),
       };
@@ -149,8 +159,8 @@ export function createCoperniqObserver(deps: CoperniqObserverDeps): Observer {
             lastSyncAt: meta?.lastSyncAt ?? null,
             projectStatusCounts,
             woStatusCounts,
-            changedProjects: [],
-            changedWorkOrders: [],
+            changedProjects,
+            changedWorkOrders,
           },
           metrics,
         },
