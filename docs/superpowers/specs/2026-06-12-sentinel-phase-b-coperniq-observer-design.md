@@ -12,14 +12,14 @@ The Sentinel cycle (live, `OPENCLAW_SENTINEL_ENABLED=1`) observes only in-house 
 
 - **Source of truth is Firestore, not the local snapshot cache.** Kaleb: Coperniq data is ingested into Firestore (`coperniqFirestoreIngest` GCF) every couple of hours; JR should read that, not `~/.openclaw/cache/coperniq/`.
 - **Signals: counts + deltas.** Project counts by stage, WO counts by status, and what changed since the last cycle. No rule-based stall detection — judgment calls stay in the synthesizer.
-- **Approach: Firestore client SDK in-process with Keychain credential** (over hand-rolled REST auth or a server-side summary GCF).
+- **Approach: Firestore client SDK in-process via ADC + service-account impersonation** (revised 2026-06-17). Original draft assumed a Keychain-stored SA JSON; replaced by ADC. No credential bytes ever live in the observer process — the Google SDK auto-discovers the impersonation chain via `~/.config/gcloud/application_default_credentials.json`.
 
 ## Data source facts (verified 2026-06-12)
 
 - Firestore lives in GCP project `openclaw-mail-bridge`. Ingest source vendored at `/Users/vero/coperniq-ingest/vendor/coperniq-sync-firestore.ts`.
 - Collections are prefixed `coperniq_` — relevant here: `coperniq_projects` (~214 docs, field `status`), `coperniq_work_orders` (~2,768 docs, fields `status`, `isCompleted`, `completedAt`), both with `createdAt`/`updatedAt`.
 - Sync watermark doc: `coperniq_sync_meta/latest` with `lastSyncAt`, `elapsedSeconds`, doc counts.
-- Credential: login Keychain item `openclaw-firestore-key` (from the 2026-05-28 Phase 2 keychain migration) holds a **hex-encoded** service-account JSON for `openclaw-mail-bridge@appspot.gserviceaccount.com`.
+- Credential (revised 2026-06-17): **ADC** at `~/.config/gcloud/application_default_credentials.json` — user `jr@veropwr.com` impersonating `clawbot-openclaw-invoker@openclaw-mail-bridge.iam.gserviceaccount.com`. The impersonated SA holds `roles/datastore.user`, `roles/logging.viewer`, and per-service `run.invoker` on this project. No SA key JSON on disk. Google client libraries auto-impersonate via ADC with zero env-var or key-path configuration.
 
 ## Component
 
@@ -28,12 +28,7 @@ The Sentinel cycle (live, `OPENCLAW_SENTINEL_ENABLED=1`) observes only in-house 
 **Deps (DI for tests):**
 
 - `db` — sentinel SQLite handle, used to read the observer's own most recent observation (for count-delta math and the stored `lastSyncAt`).
-- `getClient?: () => Promise<FirestoreLike>` — test seam. Default implementation (lazy, cached after first success):
-  1. `execFile("security", ["find-generic-password", "-w", "-s", "openclaw-firestore-key"])`
-  2. hex-decode → `JSON.parse` → `{ client_email, private_key, project_id }`
-  3. `new Firestore({ projectId, credentials: { client_email, private_key } })` via new dependency `@google-cloud/firestore`.
-
-Key material lives only in process memory — never written to disk, env, or logs.
+- `getClient?: () => Promise<FirestoreLike>` — test seam. Default implementation (lazy, cached after first success): `new Firestore({ projectId: "openclaw-mail-bridge" })` via `@google-cloud/firestore`. The SDK auto-discovers ADC and the impersonation chain; the observer code does not touch credentials at all.
 
 ## Per-cycle behavior
 
@@ -55,18 +50,18 @@ Key material lives only in process memory — never written to disk, env, or log
 ## Error handling
 
 - Watermark skip (no new sync) → `[]`, quiet.
-- Real failures — Keychain item missing/unreadable, hex/JSON decode failure, any Firestore error — **throw**. `runObservers` already catches per-observer, records `{observer, error}` in the run result, and does not advance the watermark, so the next 2h cycle retries naturally. No partial observations are written.
+- Real failures — ADC unavailable (e.g., ADC file missing or impersonation rejected), any Firestore error — **throw**. `runObservers` already catches per-observer, records `{observer, error}` in the run result, and does not advance the watermark, so the next 2h cycle retries naturally. No partial observations are written.
 
 ## Security notes (IT-SEC-001)
 
-- Credential read in-process from Keychain; no plaintext key on disk; never logged.
-- **Scope flag:** `openclaw-mail-bridge@appspot.gserviceaccount.com` is the App Engine default SA — much broader than the read-only Firestore access this observer needs. Follow-up (not blocking this build): mint a dedicated SA with `roles/datastore.viewer`, store it in the same Keychain pattern, and retire the broad key from this path.
+- **No credential bytes on disk or in memory inside the observer.** Auth is ADC + service-account impersonation on the Mac mini. The Google SDK reads `~/.config/gcloud/application_default_credentials.json` and impersonates `clawbot-openclaw-invoker@openclaw-mail-bridge.iam.gserviceaccount.com`. Source identity: user `jr@veropwr.com`.
+- **Scope flag (for the record):** the impersonated SA holds `roles/datastore.user` — project-wide _read+write_. Fine here because `openclaw-mail-bridge` only hosts JR's data. If a future observer ever needs to read a shared Firestore, the right pattern is a gateway Cloud Function with narrow scopes, not a wider SA role on this caller.
 
 ## Testing
 
-- **Unit** (`tests/sentinel/observers/coperniq.test.ts`): fake Firestore client + fake keychain reader via DI. Cover: watermark skip returns `[]` without collection reads; count grouping; delta math against a seeded prior observation; first-run (no prior observation) emits snapshot without deltas; changed-doc capture and 50-doc cap; hex decode of the keychain payload; throw on keychain failure; throw on Firestore failure.
-- **No live Firestore in tests.**
-- **Manual smoke (rollout):** one observation cycle on the Mac mini verifying (a) the Keychain read works non-interactively from the LaunchAgent context, and (b) a coperniq observation lands in sentinel.db with sane numbers vs `coperniq_sync_meta` counts.
+- **Unit** (`tests/sentinel/observers/coperniq.test.ts`): fake `FirestoreLike` client via DI. Cover: watermark skip returns `[]` without collection reads; count grouping; delta math against a seeded prior observation; first-run (no prior observation) emits snapshot without deltas; changed-doc capture and 50-doc cap; throw on Firestore failure.
+- **No live Firestore and no credential code in tests.**
+- **Manual smoke (rollout):** one observation cycle on the Mac mini verifying that a coperniq observation lands in `sentinel.db` with sane numbers vs `coperniq_sync_meta` counts. ADC is already verified end-to-end on this machine (`@google-cloud/firestore` round-tripped a `_health/adc-check` write→read→delete on 2026-06-17).
 
 ## Out of scope
 

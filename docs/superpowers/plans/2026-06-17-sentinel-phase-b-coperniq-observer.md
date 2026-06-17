@@ -4,9 +4,9 @@
 
 **Goal:** Ship a `coperniq` observer that reads project/work-order summaries from Firestore each Sentinel cycle, computes deltas against the prior observation, and emits one observation into `sentinel.db`.
 
-**Architecture:** New file `src/sentinel/observers/coperniq.ts` exporting `createCoperniqObserver(deps)`. Credentials loaded in-process from the macOS Keychain item `openclaw-firestore-key` (hex-encoded SA JSON). One-shot watermark skip via `coperniq_sync_meta/latest.lastSyncAt`. Count grouping over `coperniq_projects` and `coperniq_work_orders`. Changed-doc detail via `where("updatedAt", ">", sinceIso)`. Delta math against the observer's own most recent prior observation read from `sentinel.db`. Registered in `src/sentinel/index.ts` next to the other observers.
+**Architecture:** New file `src/sentinel/observers/coperniq.ts` exporting `createCoperniqObserver(deps)`. Auth via **Application Default Credentials + service-account impersonation** (already wired on the Mac mini; the observer code touches no credentials). One-shot watermark skip via `coperniq_sync_meta/latest.lastSyncAt`. Count grouping over `coperniq_projects` and `coperniq_work_orders`. Changed-doc detail via `where("updatedAt", ">", sinceIso)`. Delta math against the observer's own most recent prior observation read from `sentinel.db`. Registered in `src/sentinel/index.ts` next to the other observers.
 
-**Tech Stack:** TypeScript, `@google-cloud/firestore`, `better-sqlite3`, Vitest, macOS `security` CLI, Node `node:child_process` `execFile`.
+**Tech Stack:** TypeScript, `@google-cloud/firestore`, `better-sqlite3`, Vitest.
 
 **Spec:** `docs/superpowers/specs/2026-06-12-sentinel-phase-b-coperniq-observer-design.md`
 
@@ -14,12 +14,12 @@
 
 ## File structure
 
-| File                                        | Responsibility                                                                                                                                          |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/sentinel/observers/coperniq.ts`        | `createCoperniqObserver(deps)`, `loadFirestoreCredentialsFromKeychain()`, `FirestoreLike` / `FirestoreCredentials` types. Single file — small, focused. |
-| `tests/sentinel/observers/coperniq.test.ts` | Unit tests with a fake Firestore client and an injected keychain reader. No live Firestore.                                                             |
-| `src/sentinel/index.ts`                     | Register the new observer alongside the others. One-line change.                                                                                        |
-| `package.json`                              | Adds `@google-cloud/firestore` dependency.                                                                                                              |
+| File                                        | Responsibility                                                                                           |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `src/sentinel/observers/coperniq.ts`        | `createCoperniqObserver(deps)` and the `FirestoreLike` port. Single file — small, focused. No auth code. |
+| `tests/sentinel/observers/coperniq.test.ts` | Unit tests with a fake `FirestoreLike` client via DI. No live Firestore.                                 |
+| `src/sentinel/index.ts`                     | Register the new observer alongside the others. One-line change.                                         |
+| `package.json`                              | Adds `@google-cloud/firestore` dependency (Task 1 — already shipped).                                    |
 
 ---
 
@@ -29,7 +29,7 @@
 - Collections: `coperniq_projects` (~214 docs, field `status`), `coperniq_work_orders` (~2,768 docs, field `status`).
 - Doc timestamps: `updatedAt` is stored as **ISO string** (verified in `/Users/vero/coperniq-ingest/vendor/coperniq-sync-firestore.ts` — all `updatedAt: string`).
 - Watermark doc: `coperniq_sync_meta/latest`, with `lastSyncAt: string` (ISO) (verified line 1195 of same file).
-- Credential: Keychain item `openclaw-firestore-key`, hex-encoded JSON, decodes to `{ client_email, private_key, project_id, type: "service_account" }` for `openclaw-mail-bridge@appspot.gserviceaccount.com`.
+- Auth (revised 2026-06-17): **ADC + service-account impersonation** on the Mac mini. `~/.config/gcloud/application_default_credentials.json` (user `jr@veropwr.com`) impersonates `clawbot-openclaw-invoker@openclaw-mail-bridge.iam.gserviceaccount.com`, which holds `roles/datastore.user`, `roles/logging.viewer`, and per-service `run.invoker`. `@google-cloud/firestore` discovers this with zero configuration. End-to-end verified 2026-06-17 against `_health/adc-check`.
 
 ---
 
@@ -173,159 +173,67 @@ EOF
 
 ---
 
-## Task 2: Keychain credential reader
+## Task 2: Drop the unused `FirestoreCredentials` type (ADC pivot)
+
+**Context:** The original draft planned an in-process Keychain credential reader. On 2026-06-17 ADC + service-account impersonation was wired on this Mac, so the observer never sees credentials. Task 1 already shipped a `FirestoreCredentials` exported type — now dead code. Remove it and the related test bindings.
 
 **Files:**
 
 - Modify: `/Users/vero/openclaw/src/sentinel/observers/coperniq.ts`
 - Modify: `/Users/vero/openclaw/tests/sentinel/observers/coperniq.test.ts`
 
-- [ ] **Step 1: Write failing test for `decodeKeychainPayload`**
+- [ ] **Step 1: Remove `FirestoreCredentials` export from the observer**
 
-Append to `/Users/vero/openclaw/tests/sentinel/observers/coperniq.test.ts` (within a new `describe` block):
+In `/Users/vero/openclaw/src/sentinel/observers/coperniq.ts`, delete the entire `export interface FirestoreCredentials { … }` block. Leave every other export untouched.
 
-```typescript
-import { decodeKeychainPayload } from "../../../src/sentinel/observers/coperniq.js";
+- [ ] **Step 2: Update the test to stop importing the removed type**
 
-describe("decodeKeychainPayload", () => {
-  it("hex-decodes a JSON service-account payload", () => {
-    const json = JSON.stringify({
-      client_email: "sa@example.iam.gserviceaccount.com",
-      private_key: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n",
-      project_id: "my-proj",
-      type: "service_account",
-    });
-    const hex = Buffer.from(json, "utf8").toString("hex");
-    const out = decodeKeychainPayload(hex);
-    expect(out.client_email).toBe("sa@example.iam.gserviceaccount.com");
-    expect(out.project_id).toBe("my-proj");
-    expect(out.private_key.startsWith("-----BEGIN PRIVATE KEY-----")).toBe(true);
-  });
+In `/Users/vero/openclaw/tests/sentinel/observers/coperniq.test.ts`:
 
-  it("throws when the payload is not valid hex or not valid JSON", () => {
-    expect(() => decodeKeychainPayload("zzznot-hex")).toThrow();
-    const notJsonHex = Buffer.from("not json at all", "utf8").toString("hex");
-    expect(() => decodeKeychainPayload(notJsonHex)).toThrow();
-  });
+- Remove `type FirestoreCredentials` from the `import { … } from "../../../src/sentinel/observers/coperniq.js"` list.
+- Delete the local `creds` construction line and the `creds.client_email` assertion. Keep the rest of the smoke test (factory existence + `FirestoreLike` shape) intact.
 
-  it("throws when required fields are missing", () => {
-    const partial = JSON.stringify({ client_email: "a", private_key: "b" }); // no project_id
-    const hex = Buffer.from(partial, "utf8").toString("hex");
-    expect(() => decodeKeychainPayload(hex)).toThrow(/project_id/);
-  });
-});
-```
-
-- [ ] **Step 2: Run the test to verify it fails**
-
-Run:
-
-```bash
-cd /Users/vero/openclaw && pnpm vitest run tests/sentinel/observers/coperniq.test.ts
-```
-
-Expected: FAIL — `decodeKeychainPayload` is not exported.
-
-- [ ] **Step 3: Implement `decodeKeychainPayload` and `loadFirestoreCredentialsFromKeychain`**
-
-Edit `/Users/vero/openclaw/src/sentinel/observers/coperniq.ts` — at the top add:
+The resulting test body should look like:
 
 ```typescript
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { describe, it, expect } from "vitest";
+import {
+  createCoperniqObserver,
+  type FirestoreLike,
+} from "../../../src/sentinel/observers/coperniq.js";
 
-const execFileP = promisify(execFile);
-
-export function decodeKeychainPayload(hexPayload: string): FirestoreCredentials {
-  const trimmed = hexPayload.trim();
-  if (!/^[0-9a-fA-F]+$/.test(trimmed) || trimmed.length % 2 !== 0) {
-    throw new Error("openclaw-firestore-key payload is not valid hex");
-  }
-  const jsonText = Buffer.from(trimmed, "hex").toString("utf8");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonText);
-  } catch {
-    throw new Error("openclaw-firestore-key payload is not valid JSON after hex decode");
-  }
-  if (typeof parsed !== "object" || parsed === null) {
-    throw new Error("openclaw-firestore-key payload did not decode to an object");
-  }
-  const obj = parsed as Record<string, unknown>;
-  for (const field of ["client_email", "private_key", "project_id"] as const) {
-    if (typeof obj[field] !== "string" || (obj[field] as string).length === 0) {
-      throw new Error(`openclaw-firestore-key is missing required field: ${field}`);
-    }
-  }
-  return {
-    client_email: obj.client_email as string,
-    private_key: obj.private_key as string,
-    project_id: obj.project_id as string,
-  };
-}
-
-export async function loadFirestoreCredentialsFromKeychain(
-  exec: (cmd: string, args: string[]) => Promise<{ stdout: string }> = async (cmd, args) =>
-    execFileP(cmd, args),
-): Promise<FirestoreCredentials> {
-  const { stdout } = await exec("security", [
-    "find-generic-password",
-    "-w",
-    "-s",
-    "openclaw-firestore-key",
-  ]);
-  return decodeKeychainPayload(stdout);
-}
-```
-
-- [ ] **Step 4: Add a test for `loadFirestoreCredentialsFromKeychain` with an injected exec**
-
-Append to `tests/sentinel/observers/coperniq.test.ts`:
-
-```typescript
-import { loadFirestoreCredentialsFromKeychain } from "../../../src/sentinel/observers/coperniq.js";
-
-describe("loadFirestoreCredentialsFromKeychain", () => {
-  it("shells out to `security` and returns decoded credentials", async () => {
-    const json = JSON.stringify({
-      client_email: "sa@example.iam.gserviceaccount.com",
-      private_key: "k",
-      project_id: "p",
-    });
-    const hex = Buffer.from(json, "utf8").toString("hex");
-    let calledWith: { cmd: string; args: string[] } | null = null;
-    const fakeExec = async (cmd: string, args: string[]) => {
-      calledWith = { cmd, args };
-      return { stdout: `${hex}\n` };
+describe("coperniq observer module", () => {
+  it("exports createCoperniqObserver and the FirestoreLike type", () => {
+    expect(typeof createCoperniqObserver).toBe("function");
+    const client: FirestoreLike = {
+      getSyncMeta: async () => null,
+      listProjectStatuses: async () => [],
+      listWorkOrderStatuses: async () => [],
+      listChangedProjects: async () => [],
+      listChangedWorkOrders: async () => [],
     };
-    const creds = await loadFirestoreCredentialsFromKeychain(fakeExec);
-    expect(calledWith).toEqual({
-      cmd: "security",
-      args: ["find-generic-password", "-w", "-s", "openclaw-firestore-key"],
-    });
-    expect(creds.project_id).toBe("p");
+    expect(typeof client.getSyncMeta).toBe("function");
   });
 });
 ```
 
-- [ ] **Step 5: Run all observer tests**
-
-Run:
+- [ ] **Step 3: Run the test**
 
 ```bash
 cd /Users/vero/openclaw && pnpm vitest run tests/sentinel/observers/coperniq.test.ts
 ```
 
-Expected: PASS (5/5 across both describe blocks).
+Expected: PASS (1/1).
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 cd /Users/vero/openclaw && git add src/sentinel/observers/coperniq.ts tests/sentinel/observers/coperniq.test.ts && git commit -m "$(cat <<'EOF'
-feat(sentinel): keychain credential loader for coperniq observer
+refactor(sentinel): drop unused FirestoreCredentials from coperniq observer
 
-Reads openclaw-firestore-key from the macOS login Keychain, hex-decodes,
-JSON-parses, and validates required SA fields. Exec is injectable for tests.
+Auth is handled by Application Default Credentials + service-account
+impersonation (wired 2026-06-17). The observer code never sees credentials,
+so the previously-exported FirestoreCredentials type was dead weight.
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF
@@ -1265,14 +1173,16 @@ EOF
 
 ---
 
-## Task 8: Default Firestore client (lazy, cached) — wires Keychain → SDK
+## Task 8: Default Firestore client (lazy, cached) via ADC
+
+**Context:** Auth is ADC + impersonation, already wired on the Mac mini. The observer constructs a `Firestore` client with only `projectId` — the SDK reads `~/.config/gcloud/application_default_credentials.json` and impersonates the configured SA. No credential code in the observer.
 
 **Files:**
 
 - Modify: `/Users/vero/openclaw/src/sentinel/observers/coperniq.ts`
 - Modify: `/Users/vero/openclaw/tests/sentinel/observers/coperniq.test.ts`
 
-- [ ] **Step 1: Write failing test — when no `getClient` is supplied, observer attempts to load credentials from Keychain via the default loader (mocked at call boundary)**
+- [ ] **Step 1: Write failing test — lazy default client + caching across cycles**
 
 Append:
 
@@ -1290,24 +1200,13 @@ describe("createCoperniqObserver — default Firestore client", () => {
     cleanup(dbPath);
   });
 
-  it("calls the supplied credentialLoader exactly once and caches the client across cycles", async () => {
-    let credLoads = 0;
+  it("calls the supplied clientFactory exactly once and caches the client across cycles", async () => {
     let clientBuilds = 0;
-    const fakeCreds: FirestoreCredentials = {
-      client_email: "a",
-      private_key: "b",
-      project_id: "c",
-    };
 
     const obs = createCoperniqObserver({
       db,
-      credentialLoader: async () => {
-        credLoads++;
-        return fakeCreds;
-      },
-      clientFactory: (creds) => {
+      clientFactory: () => {
         clientBuilds++;
-        expect(creds).toEqual(fakeCreds);
         return makeFakeClient({
           getSyncMeta: async () => ({ lastSyncAt: "2026-06-17T12:00:00.000Z" }),
           listProjectStatuses: async () => [],
@@ -1318,7 +1217,6 @@ describe("createCoperniqObserver — default Firestore client", () => {
 
     await obs.observe(0);
     await obs.observe(0);
-    expect(credLoads).toBe(1);
     expect(clientBuilds).toBe(1);
   });
 });
@@ -1326,15 +1224,13 @@ describe("createCoperniqObserver — default Firestore client", () => {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run:
-
 ```bash
 cd /Users/vero/openclaw && pnpm vitest run tests/sentinel/observers/coperniq.test.ts
 ```
 
-Expected: FAIL — `credentialLoader` and `clientFactory` are not in `CoperniqObserverDeps`.
+Expected: FAIL — `clientFactory` is not in `CoperniqObserverDeps`.
 
-- [ ] **Step 3: Extend deps interface + implement lazy default client**
+- [ ] **Step 3: Extend deps + implement default ADC client factory**
 
 In `src/sentinel/observers/coperniq.ts`:
 
@@ -1344,20 +1240,18 @@ Replace `CoperniqObserverDeps`:
 export interface CoperniqObserverDeps {
   db: DatabaseType;
   getClient?: () => Promise<FirestoreLike>;
-  credentialLoader?: () => Promise<FirestoreCredentials>;
-  clientFactory?: (creds: FirestoreCredentials) => Promise<FirestoreLike> | FirestoreLike;
+  clientFactory?: () => Promise<FirestoreLike> | FirestoreLike;
 }
 ```
 
-Add a default client factory that uses `@google-cloud/firestore`:
+Add the default ADC factory:
 
 ```typescript
-async function defaultClientFactoryAsync(creds: FirestoreCredentials): Promise<FirestoreLike> {
+const COPERNIQ_FIRESTORE_PROJECT_ID = "openclaw-mail-bridge";
+
+async function defaultClientFactoryAsync(): Promise<FirestoreLike> {
   const { Firestore } = await import("@google-cloud/firestore");
-  const fs = new Firestore({
-    projectId: creds.project_id,
-    credentials: { client_email: creds.client_email, private_key: creds.private_key },
-  });
+  const fs = new Firestore({ projectId: COPERNIQ_FIRESTORE_PROJECT_ID });
 
   return {
     async getSyncMeta() {
@@ -1410,7 +1304,7 @@ async function defaultClientFactoryAsync(creds: FirestoreCredentials): Promise<F
 }
 ```
 
-Replace `createCoperniqObserver` body to wire the lazy cached client:
+Replace `createCoperniqObserver` to use the lazy cached default:
 
 ```typescript
 export function createCoperniqObserver(deps: CoperniqObserverDeps): Observer {
@@ -1419,10 +1313,8 @@ export function createCoperniqObserver(deps: CoperniqObserverDeps): Observer {
   async function resolveClient(): Promise<FirestoreLike> {
     if (deps.getClient) return deps.getClient();
     if (cachedClient) return cachedClient;
-    const loader = deps.credentialLoader ?? (() => loadFirestoreCredentialsFromKeychain());
     const factory = deps.clientFactory ?? defaultClientFactoryAsync;
-    const creds = await loader();
-    cachedClient = await factory(creds);
+    cachedClient = await factory();
     return cachedClient;
   }
 
@@ -1430,13 +1322,13 @@ export function createCoperniqObserver(deps: CoperniqObserverDeps): Observer {
     name: "coperniq",
     async observe(since: number): Promise<Omit<Observation, "id" | "created_at">[]> {
       const client = await resolveClient();
-      // ... existing body (watermark check, counts, deltas, summary, return)
+      // ... existing observe body (watermark check, counts, deltas, summary, return)
     },
   };
 }
 ```
 
-(Move all the existing `observe` logic into this new body, replacing the previous `getClient` call.)
+(Move all the existing `observe` logic into this new body, replacing the previous direct `getClient` call.)
 
 - [ ] **Step 4: Run all observer tests**
 
@@ -1446,18 +1338,19 @@ Run:
 cd /Users/vero/openclaw && pnpm vitest run tests/sentinel/observers/coperniq.test.ts
 ```
 
-Expected: PASS (17/17).
+Expected: PASS (test count: previous total + 1).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 cd /Users/vero/openclaw && git add src/sentinel/observers/coperniq.ts tests/sentinel/observers/coperniq.test.ts && git commit -m "$(cat <<'EOF'
-feat(sentinel): default Firestore client wired to Keychain credential
+feat(sentinel): default Firestore client via ADC + impersonation
 
-Lazy, cached @google-cloud/firestore client built from Keychain creds on
-first observe(); reused across cycles within a single observer instance.
-Credentials never touch disk. credentialLoader and clientFactory are
-injectable for tests; getClient remains supported as a full override.
+Lazy, cached @google-cloud/firestore client (projectId only) on first
+observe(); the Google SDK resolves credentials via ADC + service-account
+impersonation already wired on this Mac. clientFactory is injectable for
+tests; getClient remains supported as a full override. No credential
+material in the observer process.
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF
@@ -1550,17 +1443,9 @@ EOF
 
 This is operator-driven verification before declaring the feature shipped. Do not run autonomously.
 
-- [ ] **Step 1: Confirm the Keychain item is readable from the LaunchAgent context**
+- [ ] **Step 1: Trigger one Sentinel cycle and inspect the observation**
 
-The user runs (interactively — `! command` prefix in Claude Code):
-
-```bash
-security find-generic-password -w -s openclaw-firestore-key | head -c 16
-```
-
-Expected: 16 hex characters print without a GUI password prompt.
-
-- [ ] **Step 2: Trigger one Sentinel cycle and inspect the observation**
+(ADC is already verified end-to-end on this Mac as of 2026-06-17 — `@google-cloud/firestore` round-tripped a `_health/adc-check` write→read→delete with no env-var or key-path configuration. No further auth precheck needed.)
 
 Restart the agent so the new build is loaded:
 
@@ -1570,7 +1455,7 @@ launchctl kickstart -k gui/$(id -u)/com.openclaw.agent
 
 Wait for the next 2h tick (or use `OPENCLAW_SENTINEL_BOOT_CYCLE=1` if a one-shot helper exists; see `~/.openclaw/.env`).
 
-- [ ] **Step 3: Query sentinel.db for the new observation**
+- [ ] **Step 2: Query sentinel.db for the new observation**
 
 ```bash
 sqlite3 ~/.openclaw/sentinel.db "SELECT timestamp, summary, json_extract(metrics, '$.projects_total'), json_extract(metrics, '$.work_orders_total') FROM observations WHERE source='coperniq' ORDER BY id DESC LIMIT 3;"
@@ -1578,18 +1463,18 @@ sqlite3 ~/.openclaw/sentinel.db "SELECT timestamp, summary, json_extract(metrics
 
 Expected: at least one row whose totals match the latest `coperniq_sync_meta/latest.counts` (within the sync window).
 
-- [ ] **Step 4: Verify subsequent cycles skip when no new ingest**
+- [ ] **Step 3: Verify subsequent cycles skip when no new ingest**
 
 After two more 2h ticks without an intervening sync, expect zero new coperniq observations in `sentinel.db`. Then trigger a sync (`launchctl kickstart -k gui/$(id -u)/ai.openclaw.coperniq-sync` if applicable) and verify the next Sentinel cycle emits a fresh observation.
 
-- [ ] **Step 5: No commit — this task is verification only.**
+- [ ] **Step 4: No commit — this task is verification only.**
 
 ---
 
 ## Spec coverage check
 
 - Component file & registration → Tasks 1, 9.
-- Keychain credential read, hex decode, in-process only → Tasks 2, 8.
+- Auth via ADC + impersonation (no in-process credentials) → Task 8 (default client). Task 2 cleans up the FirestoreCredentials leftover from Task 1.
 - Watermark skip on lastSyncAt → Task 3.
 - Count grouping over projects + work_orders → Task 4.
 - Delta math vs prior observation → Task 5.
@@ -1597,7 +1482,7 @@ After two more 2h ticks without an intervening sync, expect zero new coperniq ob
 - Summary text with totals + delta phrase → Task 7.
 - Error propagation (throw, runner catches) → Task 7 (tests) + Task 9 (relies on existing `runObservers` catch).
 - No live Firestore in tests → all unit tests use injected client.
-- IT-SEC-001 follow-up (App Engine SA is too broad) → noted in spec, NOT a code task here; tracked separately.
+- IT-SEC-001 scope note: `roles/datastore.user` on the impersonated SA is project-wide _read+write_. Acceptable because `openclaw-mail-bridge` is a JR-only project; documented in the spec.
 - Manual smoke on Mac mini → Task 10.
 
 ## Out of scope (per spec)
