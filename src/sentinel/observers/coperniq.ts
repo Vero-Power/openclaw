@@ -31,6 +31,7 @@ export interface FirestoreLike {
 export interface CoperniqObserverDeps {
   db: DatabaseType;
   getClient?: () => Promise<FirestoreLike>;
+  clientFactory?: () => Promise<FirestoreLike> | FirestoreLike;
 }
 
 interface PriorObservation {
@@ -133,16 +134,83 @@ function readPriorObservation(db: DatabaseType): PriorObservation | null {
   }
 }
 
+const COPERNIQ_FIRESTORE_PROJECT_ID = "openclaw-mail-bridge";
+
+async function defaultClientFactoryAsync(): Promise<FirestoreLike> {
+  const { Firestore } = await import("@google-cloud/firestore");
+  const fs = new Firestore({ projectId: COPERNIQ_FIRESTORE_PROJECT_ID });
+
+  return {
+    async getSyncMeta() {
+      const doc = await fs.collection("coperniq_sync_meta").doc("latest").get();
+      const data = doc.data();
+      if (!data || typeof data.lastSyncAt !== "string") {
+        return null;
+      }
+      return { lastSyncAt: data.lastSyncAt };
+    },
+    async listProjectStatuses() {
+      const snap = await fs.collection("coperniq_projects").select("status").get();
+      return snap.docs.map((d) => ({
+        id: d.id,
+        status: (d.get("status") as string | null) ?? null,
+      }));
+    },
+    async listWorkOrderStatuses() {
+      const snap = await fs.collection("coperniq_work_orders").select("status").get();
+      return snap.docs.map((d) => ({
+        id: d.id,
+        status: (d.get("status") as string | null) ?? null,
+      }));
+    },
+    async listChangedProjects(sinceIso, limit) {
+      const snap = await fs
+        .collection("coperniq_projects")
+        .where("updatedAt", ">", sinceIso)
+        .limit(limit)
+        .get();
+      return snap.docs.map((d) => ({
+        id: d.id,
+        status: (d.get("status") as string | null) ?? null,
+        updatedAt: d.get("updatedAt") as string | undefined,
+        title: d.get("title") as string | undefined,
+      }));
+    },
+    async listChangedWorkOrders(sinceIso, limit) {
+      const snap = await fs
+        .collection("coperniq_work_orders")
+        .where("updatedAt", ">", sinceIso)
+        .limit(limit)
+        .get();
+      return snap.docs.map((d) => ({
+        id: d.id,
+        status: (d.get("status") as string | null) ?? null,
+        updatedAt: d.get("updatedAt") as string | undefined,
+        title: d.get("title") as string | undefined,
+      }));
+    },
+  };
+}
+
 export function createCoperniqObserver(deps: CoperniqObserverDeps): Observer {
+  let cachedClient: FirestoreLike | null = null;
+
+  async function resolveClient(): Promise<FirestoreLike> {
+    if (deps.getClient) {
+      return deps.getClient();
+    }
+    if (cachedClient) {
+      return cachedClient;
+    }
+    const factory = deps.clientFactory ?? defaultClientFactoryAsync;
+    cachedClient = await factory();
+    return cachedClient;
+  }
+
   return {
     name: "coperniq",
     async observe(since: number): Promise<Omit<Observation, "id" | "created_at">[]> {
-      const getClient =
-        deps.getClient ??
-        (async () => {
-          throw new Error("default Firestore client not yet wired (see Task 8 in plan)");
-        });
-      const client = await getClient();
+      const client = await resolveClient();
       const meta = await client.getSyncMeta();
       const prior = readPriorObservation(deps.db);
 

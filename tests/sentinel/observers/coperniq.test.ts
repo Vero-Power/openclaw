@@ -441,3 +441,37 @@ describe("createCoperniqObserver — error propagation", () => {
     await expect(obs.observe(0)).rejects.toThrow(/firestore boom/);
   });
 });
+
+describe("createCoperniqObserver — default Firestore client", () => {
+  let dbPath: string;
+  let db: DatabaseType;
+
+  beforeEach(() => {
+    dbPath = tmpSentinelDb();
+    db = openSentinelDb(dbPath);
+  });
+  afterEach(() => {
+    db.close();
+    cleanupDb(dbPath);
+  });
+
+  it("calls the supplied clientFactory exactly once and caches the client across cycles", async () => {
+    let clientBuilds = 0;
+
+    const obs = createCoperniqObserver({
+      db,
+      clientFactory: () => {
+        clientBuilds++;
+        return makeFakeClient({
+          getSyncMeta: async () => ({ lastSyncAt: "2026-06-17T12:00:00.000Z" }),
+          listProjectStatuses: async () => [],
+          listWorkOrderStatuses: async () => [],
+        });
+      },
+    });
+
+    await obs.observe(0);
+    await obs.observe(0);
+    expect(clientBuilds).toBe(1);
+  });
+});
