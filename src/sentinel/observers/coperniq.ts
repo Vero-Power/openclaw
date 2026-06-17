@@ -66,6 +66,22 @@ function flattenCounts(prefix: string, counts: Record<string, number>): Record<s
   return out;
 }
 
+function computeDeltas(
+  prefix: string,
+  current: Record<string, number>,
+  prior: Record<string, number>,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  const keys = new Set([...Object.keys(current), ...Object.keys(prior)]);
+  for (const k of keys) {
+    const delta = (current[k] ?? 0) - (prior[k] ?? 0);
+    if (delta !== 0) {
+      out[`delta_${prefix}_${k}`] = delta;
+    }
+  }
+  return out;
+}
+
 function readPriorObservation(db: DatabaseType): PriorObservation | null {
   const row = db
     .prepare(`SELECT data FROM observations WHERE source = 'coperniq' ORDER BY id DESC LIMIT 1`)
@@ -114,6 +130,14 @@ export function createCoperniqObserver(deps: CoperniqObserverDeps): Observer {
         ...flattenCounts("project_status", projectStatusCounts),
         ...flattenCounts("wo_status", woStatusCounts),
       };
+
+      if (prior) {
+        Object.assign(
+          metrics,
+          computeDeltas("project_status", projectStatusCounts, prior.projectStatusCounts),
+          computeDeltas("wo_status", woStatusCounts, prior.woStatusCounts),
+        );
+      }
 
       return [
         {

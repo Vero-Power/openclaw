@@ -174,3 +174,98 @@ describe("createCoperniqObserver — first-run snapshot", () => {
     });
   });
 });
+
+describe("createCoperniqObserver — deltas", () => {
+  let dbPath: string;
+  let db: DatabaseType;
+
+  beforeEach(() => {
+    dbPath = tmpSentinelDb();
+    db = openSentinelDb(dbPath);
+  });
+
+  afterEach(() => {
+    db.close();
+    cleanupDb(dbPath);
+  });
+
+  it("emits delta metrics relative to the most recent prior observation", async () => {
+    // prior: 2 in_progress, 1 complete projects; 5 assigned, 10 done WOs
+    db.prepare(
+      `INSERT INTO observations (source, topic, timestamp, summary, data, metrics, created_at) VALUES (?,?,?,?,?,?,?)`,
+    ).run(
+      "coperniq",
+      "coperniq-ops",
+      Date.now() - 7_200_000,
+      "prior",
+      JSON.stringify({
+        lastSyncAt: "2026-06-17T10:00:00.000Z",
+        projectStatusCounts: { in_progress: 2, complete: 1 },
+        woStatusCounts: { assigned: 5, done: 10 },
+      }),
+      JSON.stringify({}),
+      Date.now() - 7_200_000,
+    );
+
+    // current: 1 in_progress, 2 complete projects; 3 assigned, 12 done, 1 review WOs
+    const client = makeFakeClient({
+      getSyncMeta: async () => ({ lastSyncAt: "2026-06-17T12:00:00.000Z" }),
+      listProjectStatuses: async () => [
+        { id: "p1", status: "in_progress" },
+        { id: "p2", status: "complete" },
+        { id: "p3", status: "complete" },
+      ],
+      listWorkOrderStatuses: async () => [
+        ...Array.from({ length: 3 }, (_, i) => ({ id: `a${i}`, status: "assigned" })),
+        ...Array.from({ length: 12 }, (_, i) => ({ id: `d${i}`, status: "done" })),
+        { id: "r1", status: "review" },
+      ],
+    });
+
+    const obs = createCoperniqObserver({ db, getClient: async () => client });
+    const out = await obs.observe(0);
+    expect(out).toHaveLength(1);
+
+    const m = out[0].metrics ?? {};
+    // project deltas
+    expect(m.delta_project_status_in_progress).toBe(-1);
+    expect(m.delta_project_status_complete).toBe(1);
+    // wo deltas
+    expect(m.delta_wo_status_assigned).toBe(-2);
+    expect(m.delta_wo_status_done).toBe(2);
+    expect(m.delta_wo_status_review).toBe(1);
+  });
+
+  it("does not include zero-delta keys", async () => {
+    db.prepare(
+      `INSERT INTO observations (source, topic, timestamp, summary, data, metrics, created_at) VALUES (?,?,?,?,?,?,?)`,
+    ).run(
+      "coperniq",
+      "coperniq-ops",
+      Date.now() - 1000,
+      "prior",
+      JSON.stringify({
+        lastSyncAt: "2026-06-17T10:00:00.000Z",
+        projectStatusCounts: { in_progress: 2 },
+        woStatusCounts: { done: 5 },
+      }),
+      JSON.stringify({}),
+      Date.now() - 1000,
+    );
+
+    const client = makeFakeClient({
+      getSyncMeta: async () => ({ lastSyncAt: "2026-06-17T12:00:00.000Z" }),
+      listProjectStatuses: async () => [
+        { id: "p1", status: "in_progress" },
+        { id: "p2", status: "in_progress" },
+      ],
+      listWorkOrderStatuses: async () =>
+        Array.from({ length: 5 }, (_, i) => ({ id: `d${i}`, status: "done" })),
+    });
+
+    const obs = createCoperniqObserver({ db, getClient: async () => client });
+    const out = await obs.observe(0);
+    const metricKeys = Object.keys(out[0].metrics ?? {});
+    expect(metricKeys.some((k) => k.startsWith("delta_"))).toBe(false);
+  });
+});
