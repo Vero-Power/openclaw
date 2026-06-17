@@ -102,3 +102,75 @@ describe("createCoperniqObserver — watermark skip", () => {
     expect(collectionsRead).toBe(0);
   });
 });
+
+describe("createCoperniqObserver — first-run snapshot", () => {
+  let dbPath: string;
+  let db: DatabaseType;
+
+  beforeEach(() => {
+    dbPath = tmpSentinelDb();
+    db = openSentinelDb(dbPath);
+  });
+
+  afterEach(() => {
+    db.close();
+    cleanupDb(dbPath);
+  });
+
+  it("emits one observation with counts when there is no prior observation", async () => {
+    const client = makeFakeClient({
+      getSyncMeta: async () => ({ lastSyncAt: "2026-06-17T12:00:00.000Z" }),
+      listProjectStatuses: async () => [
+        { id: "p1", status: "in_progress" },
+        { id: "p2", status: "in_progress" },
+        { id: "p3", status: "complete" },
+      ],
+      listWorkOrderStatuses: async () => [
+        { id: "w1", status: "assigned" },
+        { id: "w2", status: "done" },
+        { id: "w3", status: "done" },
+        { id: "w4", status: "done" },
+      ],
+    });
+
+    const obs = createCoperniqObserver({ db, getClient: async () => client });
+    const out = await obs.observe(0);
+
+    expect(out).toHaveLength(1);
+    const o = out[0];
+    expect(o.source).toBe("coperniq");
+    expect(o.topic).toBe("coperniq-ops");
+    expect(o.metrics).toMatchObject({
+      projects_total: 3,
+      work_orders_total: 4,
+      project_status_in_progress: 2,
+      project_status_complete: 1,
+      wo_status_assigned: 1,
+      wo_status_done: 3,
+    });
+    const metricKeys = Object.keys(o.metrics ?? {});
+    expect(metricKeys.some((k) => k.startsWith("delta_"))).toBe(false);
+    expect(o.data).toMatchObject({
+      lastSyncAt: "2026-06-17T12:00:00.000Z",
+      projectStatusCounts: { in_progress: 2, complete: 1 },
+      woStatusCounts: { assigned: 1, done: 3 },
+    });
+  });
+
+  it("treats null status as 'unknown'", async () => {
+    const client = makeFakeClient({
+      getSyncMeta: async () => ({ lastSyncAt: "2026-06-17T12:00:00.000Z" }),
+      listProjectStatuses: async () => [
+        { id: "p1", status: null },
+        { id: "p2", status: "complete" },
+      ],
+      listWorkOrderStatuses: async () => [],
+    });
+    const obs = createCoperniqObserver({ db, getClient: async () => client });
+    const out = await obs.observe(0);
+    expect(out[0].metrics).toMatchObject({
+      project_status_unknown: 1,
+      project_status_complete: 1,
+    });
+  });
+});
