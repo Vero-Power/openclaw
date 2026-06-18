@@ -169,9 +169,14 @@ async function defaultClientFactoryAsync(): Promise<LoggingLike> {
 
   return {
     async listFunctionEntries(serviceName: string, sinceIso: string): Promise<LogEntry[]> {
+      // Cloud Run service_name (Gen 2) is always lowercase. Gen 1 function_name
+      // matches the deployed identifier (typically lowercase too). The
+      // GCP_FUNCTIONS constant carries camelCase display names — lowercase for
+      // the filter so the query actually matches.
+      const filterName = serviceName.toLowerCase();
       const filter =
-        `((resource.type="cloud_run_revision" AND resource.labels.service_name="${serviceName}") ` +
-        `OR (resource.type="cloud_function" AND resource.labels.function_name="${serviceName}")) ` +
+        `((resource.type="cloud_run_revision" AND resource.labels.service_name="${filterName}") ` +
+        `OR (resource.type="cloud_function" AND resource.labels.function_name="${filterName}")) ` +
         `AND timestamp >= "${sinceIso}"`;
       const [entries] = await logging.getEntries({
         filter,
