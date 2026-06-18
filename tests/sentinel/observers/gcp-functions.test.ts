@@ -190,3 +190,71 @@ describe("createGcpFunctionsObserver — last_invocation_at + last_error", () =>
     expect(bom?.last_error).toBeNull();
   });
 });
+
+describe("createGcpFunctionsObserver — deltas", () => {
+  let dbPath: string;
+  let db: DatabaseType;
+
+  beforeEach(() => {
+    dbPath = tmpSentinelDb();
+    db = openSentinelDb(dbPath);
+  });
+  afterEach(() => {
+    db.close();
+    cleanupDb(dbPath);
+  });
+
+  it("emits nonzero delta metrics vs the most recent prior gcp-functions observation", async () => {
+    // Seed prior: bom 5 inv / 1 err; ghl 2 inv / 0 err.
+    db.prepare(
+      `INSERT INTO observations (source, topic, timestamp, summary, data, metrics, created_at) VALUES (?,?,?,?,?,?,?)`,
+    ).run(
+      "gcp-functions",
+      "gcp-functions",
+      Date.now() - 7_200_000,
+      "prior",
+      JSON.stringify({
+        functions: [
+          { name: "bomQuoteNotifier", invocations: 5, errors: 1 },
+          { name: "ghlFirestoreIngest", invocations: 2, errors: 0 },
+        ],
+      }),
+      JSON.stringify({}),
+      Date.now() - 7_200_000,
+    );
+
+    const client = makeFakeClient({
+      bomQuoteNotifier: [
+        { timestamp: "2026-06-17T20:30:00Z", severity: "INFO", text: "ok" },
+        { timestamp: "2026-06-17T20:31:00Z", severity: "INFO", text: "ok" },
+        { timestamp: "2026-06-17T20:32:00Z", severity: "INFO", text: "ok" },
+        { timestamp: "2026-06-17T20:33:00Z", severity: "ERROR", text: "boom" },
+      ],
+      ghlFirestoreIngest: [
+        { timestamp: "2026-06-17T20:45:00Z", severity: "ERROR", text: "x" },
+        { timestamp: "2026-06-17T20:46:00Z", severity: "ERROR", text: "y" },
+      ],
+    });
+
+    const obs = createGcpFunctionsObserver({ db, getClient: async () => client });
+    const out = await obs.observe(0);
+    const m = out[0].metrics ?? {};
+
+    // bom: 5 -> 4 invocations (-1), 1 -> 1 errors (no delta)
+    expect(m.delta_bomquotenotifier_invocations).toBe(-1);
+    expect(m.delta_bomquotenotifier_errors).toBeUndefined();
+    // ghl: 2 -> 2 invocations (no delta), 0 -> 2 errors (+2)
+    expect(m.delta_ghlfirestoreingest_invocations).toBeUndefined();
+    expect(m.delta_ghlfirestoreingest_errors).toBe(2);
+  });
+
+  it("first run (no prior observation) has no delta keys", async () => {
+    const client = makeFakeClient({
+      bomQuoteNotifier: [{ timestamp: "2026-06-17T20:30:00Z", severity: "INFO", text: "ok" }],
+    });
+    const obs = createGcpFunctionsObserver({ db, getClient: async () => client });
+    const out = await obs.observe(0);
+    const metricKeys = Object.keys(out[0].metrics ?? {});
+    expect(metricKeys.some((k) => k.startsWith("delta_"))).toBe(false);
+  });
+});

@@ -77,6 +77,71 @@ function extractFunctionDetail(entries: LogEntry[]): {
   };
 }
 
+interface PriorFunction {
+  name: string;
+  invocations: number;
+  errors: number;
+}
+
+interface PriorObservation {
+  functions: PriorFunction[];
+}
+
+function readPriorObservation(db: DatabaseType): PriorObservation | null {
+  const row = db
+    .prepare(
+      `SELECT data FROM observations WHERE source = 'gcp-functions' ORDER BY id DESC LIMIT 1`,
+    )
+    .get() as { data: string | null } | undefined;
+  if (!row?.data) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(row.data) as Partial<PriorObservation>;
+    if (!Array.isArray(parsed.functions)) {
+      return null;
+    }
+    return {
+      functions: parsed.functions
+        .filter(
+          (f): f is PriorFunction =>
+            typeof f === "object" &&
+            f !== null &&
+            typeof f.name === "string" &&
+            typeof f.invocations === "number" &&
+            typeof f.errors === "number",
+        )
+        .map((f) => ({ name: f.name, invocations: f.invocations, errors: f.errors })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function computeDeltas(
+  current: Array<{ name: string; invocations: number; errors: number }>,
+  prior: PriorObservation,
+): Record<string, number> {
+  const priorByName = new Map(prior.functions.map((f) => [f.name, f]));
+  const out: Record<string, number> = {};
+  for (const f of current) {
+    const p = priorByName.get(f.name);
+    if (!p) {
+      continue;
+    }
+    const slug = slugify(f.name);
+    const dInv = f.invocations - p.invocations;
+    const dErr = f.errors - p.errors;
+    if (dInv !== 0) {
+      out[`delta_${slug}_invocations`] = dInv;
+    }
+    if (dErr !== 0) {
+      out[`delta_${slug}_errors`] = dErr;
+    }
+  }
+  return out;
+}
+
 export function createGcpFunctionsObserver(deps: GcpFunctionsObserverDeps): Observer {
   return {
     name: "gcp-functions",
@@ -122,6 +187,11 @@ export function createGcpFunctionsObserver(deps: GcpFunctionsObserverDeps): Obse
         const slug = slugify(f.name);
         metrics[`${slug}_invocations`] = f.invocations;
         metrics[`${slug}_errors`] = f.errors;
+      }
+
+      const prior = readPriorObservation(deps.db);
+      if (prior) {
+        Object.assign(metrics, computeDeltas(functions, prior));
       }
 
       return [
