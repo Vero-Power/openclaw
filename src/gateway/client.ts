@@ -79,6 +79,56 @@ export function describeGatewayCloseCode(code: number): string | undefined {
   return GATEWAY_CLOSE_CODE_HINTS[code];
 }
 
+const PAIRING_REQUIRED_REASON_RE = /\bpairing required\b|\bnot[_ ]paired\b/i;
+
+/**
+ * True when the WS close reason indicates the connecting client is not
+ * (or no longer) approved to pair. Emitted by the gateway with code 1008.
+ *
+ * This is an authentication state, NOT a process/port issue. Restarting
+ * the gateway or killing processes will not change pairing state — the
+ * fix is to approve the pending request via `openclaw devices approve`.
+ */
+export function isPairingRequiredCloseReason(reason: string | undefined): boolean {
+  if (!reason) {
+    return false;
+  }
+  return PAIRING_REQUIRED_REASON_RE.test(reason);
+}
+
+/**
+ * Returns a prescriptive error message for a `1008 pairing required` close.
+ *
+ * The text is intentionally explicit about what the error means and what
+ * NOT to do, so downstream readers (CLI users, tool consumers, LLM agents)
+ * don't misinterpret it as a stuck-process / port-conflict problem and try
+ * to "fix" it by restarting the gateway.
+ */
+export function formatGatewayPairingRequiredError(reason: string): string {
+  const reasonText = reason?.trim() || "pairing required";
+  return [
+    `gateway closed (1008 policy violation): ${reasonText}`,
+    "",
+    "This is an authentication/pairing error, NOT a stuck process or port conflict.",
+    "The gateway is running but rejected this client because it has not been approved",
+    "(or its previously-approved scopes were upgraded and require re-approval).",
+    "Reconnecting or restarting the gateway will not change pairing state — every retry",
+    "will produce the same close code until the request is approved.",
+    "",
+    "To resolve, on the host running the gateway:",
+    "  1. List pending pairing/scope-upgrade requests:  openclaw devices list",
+    '  2. Approve the entry under the "Pending" table: openclaw devices approve <requestId>',
+    "",
+    "If the failing client is a Slack/DM sender (not a WS device), use the channel",
+    "pairing flow instead:",
+    "  openclaw pairing list <channel>",
+    "  openclaw pairing approve <channel> <code>",
+    "",
+    "Do NOT run `openclaw gateway restart`, kill gateway PIDs, or retry connections —",
+    "none of those affect pairing state.",
+  ].join("\n");
+}
+
 export class GatewayClient {
   private ws: WebSocket | null = null;
   private opts: GatewayClientOptions;
@@ -193,7 +243,11 @@ export class GatewayClient {
           );
         }
       }
-      this.flushPendingErrors(new Error(`gateway closed (${code}): ${reasonText}`));
+      const closeMessage =
+        code === 1008 && isPairingRequiredCloseReason(reasonText)
+          ? formatGatewayPairingRequiredError(reasonText)
+          : `gateway closed (${code}): ${reasonText}`;
+      this.flushPendingErrors(new Error(closeMessage));
       this.scheduleReconnect();
       this.opts.onClose?.(code, reasonText);
     });

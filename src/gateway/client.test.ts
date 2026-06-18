@@ -218,4 +218,70 @@ describe("GatewayClient close handling", () => {
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
     client.stop();
   });
+
+  it("preserves the raw reason on onClose for pairing-required closes", () => {
+    const onClose = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onClose,
+    });
+
+    client.start();
+    getLatestWs().emitClose(1008, "pairing required");
+
+    // Higher layers (e.g. the iOS pairing-issue detector) match on the raw
+    // reason string, so the onClose contract must stay verbatim even though
+    // pending-request rejections get the prescriptive guidance text.
+    expect(onClose).toHaveBeenCalledWith(1008, "pairing required");
+    client.stop();
+  });
+});
+
+describe("isPairingRequiredCloseReason", () => {
+  it("matches the exact gateway close reason emitted by message-handler", async () => {
+    const { isPairingRequiredCloseReason } = await import("./client.js");
+    expect(isPairingRequiredCloseReason("pairing required")).toBe(true);
+  });
+
+  it("matches NOT_PAIRED variants surfaced from gateway error shapes", async () => {
+    const { isPairingRequiredCloseReason } = await import("./client.js");
+    expect(isPairingRequiredCloseReason("NOT_PAIRED")).toBe(true);
+    expect(isPairingRequiredCloseReason("not_paired")).toBe(true);
+    expect(isPairingRequiredCloseReason("device not paired yet")).toBe(true);
+  });
+
+  it("does not match unrelated 1008 close reasons", async () => {
+    const { isPairingRequiredCloseReason } = await import("./client.js");
+    expect(isPairingRequiredCloseReason("device token mismatch")).toBe(false);
+    expect(isPairingRequiredCloseReason("policy violation")).toBe(false);
+    expect(isPairingRequiredCloseReason("")).toBe(false);
+    expect(isPairingRequiredCloseReason(undefined)).toBe(false);
+  });
+});
+
+describe("formatGatewayPairingRequiredError", () => {
+  it("emits an authoritative, action-oriented diagnosis", async () => {
+    const { formatGatewayPairingRequiredError } = await import("./client.js");
+    const message = formatGatewayPairingRequiredError("pairing required");
+
+    // Anchors the original close shape so log searches for "1008" still land.
+    expect(message).toContain("gateway closed (1008 policy violation): pairing required");
+    // Diagnoses the failure class explicitly so LLM agents and operators do
+    // not mistake it for a stuck-process / port-conflict problem.
+    expect(message).toContain("authentication/pairing error");
+    expect(message).toMatch(/NOT a stuck process/i);
+    // Names the exact remediation commands.
+    expect(message).toContain("openclaw devices list");
+    expect(message).toContain("openclaw devices approve <requestId>");
+    expect(message).toContain("openclaw pairing approve <channel> <code>");
+    // Names the wrong remediation explicitly so agents don't suggest it.
+    expect(message).toMatch(/Do NOT run `openclaw gateway restart`/);
+  });
+
+  it("falls back to a stable reason text when the close reason is empty", async () => {
+    const { formatGatewayPairingRequiredError } = await import("./client.js");
+    expect(formatGatewayPairingRequiredError("")).toContain(
+      "gateway closed (1008 policy violation): pairing required",
+    );
+  });
 });

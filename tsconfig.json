@@ -25,14 +25,7 @@
   },
   "include": [
     "src/**/*",
-    "ui/**/*",
-    "extensions/**/*",
-    "scripts/ghl-client.ts",
-    "scripts/ghl-sync.ts",
-    "scripts/coperniq-sync.ts",
-    "scripts/slack-sync.ts",
-    "scripts/email-sync.ts",
-    "scripts/morning-report-data.ts"
+    "extensions/**/*"
   ],
   "exclude": ["node_modules", "dist"]
 }

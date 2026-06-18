@@ -1,10 +1,12 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { danger } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
-import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
+import { slackMessageGate } from "../../../triage/gate.js";
+import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMessageHandler } from "../message-handler.js";
+import { runTriagePipeline, handleThreadReplyForActiveTriage } from "../triage-bridge.js";
 import type {
   SlackMessageChangedEvent,
   SlackMessageDeletedEvent,
@@ -49,6 +51,9 @@ export function registerSlackMessageEvents(params: {
       }
 
       const message = event as SlackMessageEvent;
+      ctx.runtime.log(
+        `[DIAG msg-handler] ts=${message.ts ?? "?"} subtype=${message.subtype ?? "none"} channel=${message.channel} user=${message.user ?? "?"} text="${(message.text ?? "").slice(0, 40)}"`,
+      );
       if (message.subtype === "message_changed") {
         const changed = event as SlackMessageChangedEvent;
         const channelId = changed.channel;
@@ -91,25 +96,32 @@ export function registerSlackMessageEvents(params: {
         return;
       }
 
-      await handleSlackMessage(message, { source: "message" });
-    } catch (err) {
-      ctx.runtime.error?.(danger(`slack handler failed: ${String(err)}`));
-    }
-  });
-
-  ctx.app.event("app_mention", async ({ event, body }: SlackEventMiddlewareArgs<"app_mention">) => {
-    try {
-      if (ctx.shouldDropMismatchedSlackEvent(body)) {
+      // TODO(Task 6): triage gate — guarded by OPENCLAW_TRIAGE_REIMPL=1 feature flag
+      if (message.thread_ts && message.thread_ts !== message.ts) {
+        // Thread reply: check for active triage approval signal first.
+        // If the handler consumed the message (returned true), stop here — do NOT
+        // fall through to the gate, which would create a duplicate triage session.
+        const consumed = await handleThreadReplyForActiveTriage(message, ctx);
+        if (consumed) {
+          return;
+        }
+      }
+      const gateResult = slackMessageGate({
+        user: message.user ?? "",
+        bot_id: message.bot_id,
+        channel: message.channel,
+        text: message.text ?? "",
+        jr_user_id: ctx.botUserId,
+        allowed_channels: ["*"],
+      });
+      if (gateResult.eligible) {
+        await runTriagePipeline(message, ctx);
         return;
       }
 
-      const mention = event as SlackAppMentionEvent;
-      await handleSlackMessage(mention as unknown as SlackMessageEvent, {
-        source: "app_mention",
-        wasMentioned: true,
-      });
+      await handleSlackMessage(message, { source: "message" });
     } catch (err) {
-      ctx.runtime.error?.(danger(`slack mention handler failed: ${String(err)}`));
+      ctx.runtime.error?.(danger(`slack handler failed: ${String(err)}`));
     }
   });
 }

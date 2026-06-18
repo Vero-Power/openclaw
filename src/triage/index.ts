@@ -1,0 +1,14 @@
+export { slackMessageGate } from "./gate.js";
+export type { GateInput, GateResult } from "./gate.js";
+export { Classifier } from "./classifier.js";
+export { Planner } from "./planner.js";
+export { Executor } from "./executor.js";
+export { SessionStore } from "./session-store.js";
+export { openTriageDb } from "./db.js";
+export { parseApprovalReply } from "./approval-listener.js";
+export type { ApprovalSignal } from "./approval-listener.js";
+export { bootstrapActionCatalog, ActionRegistry } from "./actions/index.js";
+export type { CatalogAction, ActionContext } from "./actions/types.js";
+export type { TriageSession, TriageState, ClassifierOutput, Plan, PlanStep } from "./types.js";
+export { handleChatMessage } from "./chat/index.js";
+export type { ChatHandlerDeps } from "./chat/index.js";
