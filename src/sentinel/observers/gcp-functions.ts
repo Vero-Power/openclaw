@@ -29,6 +29,7 @@ export const GCP_FUNCTIONS = [
 
 const WINDOW_MS = 2 * 60 * 60 * 1000;
 const ERROR_SEVERITIES = new Set(["ERROR", "CRITICAL", "ALERT", "EMERGENCY"]);
+const LAST_ERROR_MAX_LEN = 300;
 
 function slugify(name: string): string {
   return (
@@ -47,6 +48,33 @@ function countEntries(entries: LogEntry[]): { invocations: number; errors: numbe
     }
   }
   return { invocations: entries.length, errors };
+}
+
+function extractFunctionDetail(entries: LogEntry[]): {
+  last_invocation_at: string | null;
+  last_error: { ts: string; text: string } | null;
+} {
+  let newestTs: string | null = null;
+  let newestErrorTs: string | null = null;
+  let newestErrorText: string | null = null;
+  for (const e of entries) {
+    if (newestTs === null || e.timestamp.localeCompare(newestTs) > 0) {
+      newestTs = e.timestamp;
+    }
+    if (ERROR_SEVERITIES.has(e.severity)) {
+      if (newestErrorTs === null || e.timestamp.localeCompare(newestErrorTs) > 0) {
+        newestErrorTs = e.timestamp;
+        newestErrorText = e.text;
+      }
+    }
+  }
+  return {
+    last_invocation_at: newestTs,
+    last_error:
+      newestErrorTs !== null && newestErrorText !== null
+        ? { ts: newestErrorTs, text: newestErrorText.slice(0, LAST_ERROR_MAX_LEN) }
+        : null,
+  };
 }
 
 export function createGcpFunctionsObserver(deps: GcpFunctionsObserverDeps): Observer {
@@ -73,12 +101,13 @@ export function createGcpFunctionsObserver(deps: GcpFunctionsObserverDeps): Obse
 
       const functions = entriesByFunction.map(({ name, entries }) => {
         const { invocations, errors } = countEntries(entries);
+        const detail = extractFunctionDetail(entries);
         return {
           name,
           invocations,
           errors,
-          last_invocation_at: null as string | null,
-          last_error: null as { ts: string; text: string } | null,
+          last_invocation_at: detail.last_invocation_at,
+          last_error: detail.last_error,
         };
       });
 

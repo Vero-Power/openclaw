@@ -118,3 +118,75 @@ describe("createGcpFunctionsObserver — first-run tally", () => {
     expect(Math.abs(sinceMs - expectedMs)).toBeLessThan(5000);
   });
 });
+
+describe("createGcpFunctionsObserver — last_invocation_at + last_error", () => {
+  let dbPath: string;
+  let db: DatabaseType;
+
+  beforeEach(() => {
+    dbPath = tmpSentinelDb();
+    db = openSentinelDb(dbPath);
+  });
+  afterEach(() => {
+    db.close();
+    cleanupDb(dbPath);
+  });
+
+  it("picks the newest entry by timestamp for last_invocation_at", async () => {
+    const client = makeFakeClient({
+      bomQuoteNotifier: [
+        { timestamp: "2026-06-17T20:30:00Z", severity: "INFO", text: "old" },
+        { timestamp: "2026-06-17T20:45:00Z", severity: "INFO", text: "newest" },
+        { timestamp: "2026-06-17T20:35:00Z", severity: "INFO", text: "middle" },
+      ],
+    });
+    const obs = createGcpFunctionsObserver({ db, getClient: async () => client });
+    const out = await obs.observe(0);
+    const data = out[0].data as {
+      functions: Array<{ name: string; last_invocation_at: string | null }>;
+    };
+    const bom = data.functions.find((f) => f.name === "bomQuoteNotifier");
+    expect(bom?.last_invocation_at).toBe("2026-06-17T20:45:00Z");
+  });
+
+  it("last_invocation_at is null when no entries", async () => {
+    const obs = createGcpFunctionsObserver({ db, getClient: async () => makeFakeClient() });
+    const out = await obs.observe(0);
+    const data = out[0].data as { functions: Array<{ last_invocation_at: string | null }> };
+    expect(data.functions.every((f) => f.last_invocation_at === null)).toBe(true);
+  });
+
+  it("last_error picks the newest error-severity entry, truncated to 300 chars", async () => {
+    const longText = "X".repeat(500);
+    const client = makeFakeClient({
+      bomQuoteNotifier: [
+        { timestamp: "2026-06-17T20:30:00Z", severity: "ERROR", text: "old err" },
+        { timestamp: "2026-06-17T20:45:00Z", severity: "ERROR", text: longText },
+        { timestamp: "2026-06-17T20:50:00Z", severity: "INFO", text: "not an error" },
+      ],
+    });
+    const obs = createGcpFunctionsObserver({ db, getClient: async () => client });
+    const out = await obs.observe(0);
+    const data = out[0].data as {
+      functions: Array<{ name: string; last_error: { ts: string; text: string } | null }>;
+    };
+    const bom = data.functions.find((f) => f.name === "bomQuoteNotifier");
+    expect(bom?.last_error?.ts).toBe("2026-06-17T20:45:00Z");
+    expect(bom?.last_error?.text).toHaveLength(300);
+    expect(bom?.last_error?.text).toMatch(/^X+$/);
+  });
+
+  it("last_error is null when no error-severity entries", async () => {
+    const client = makeFakeClient({
+      bomQuoteNotifier: [
+        { timestamp: "2026-06-17T20:30:00Z", severity: "INFO", text: "ok" },
+        { timestamp: "2026-06-17T20:31:00Z", severity: "WARNING", text: "yellow" },
+      ],
+    });
+    const obs = createGcpFunctionsObserver({ db, getClient: async () => client });
+    const out = await obs.observe(0);
+    const data = out[0].data as { functions: Array<{ name: string; last_error: unknown }> };
+    const bom = data.functions.find((f) => f.name === "bomQuoteNotifier");
+    expect(bom?.last_error).toBeNull();
+  });
+});
