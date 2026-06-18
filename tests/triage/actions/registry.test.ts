@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { z } from "zod";
-import { ActionRegistry } from "../../../src/triage/actions/registry.js";
+import { ActionRegistry, bootstrapActionCatalog } from "../../../src/triage/actions/index.js";
+import type { SlackClientLike } from "../../../src/triage/actions/slack/types.js";
 import type { CatalogAction } from "../../../src/triage/actions/types.js";
 
 const echoAction: CatalogAction<{ msg: string }, { echoed: string }> = {
@@ -78,3 +79,40 @@ function fakeCtx() {
     },
   };
 }
+
+function makeSlackClient(): SlackClientLike {
+  return {
+    chat: { postMessage: vi.fn(async () => ({ ok: true })) },
+    conversations: { open: vi.fn(async () => ({ ok: true, channel: { id: "D_FAKE" } })) },
+  };
+}
+
+describe("bootstrapActionCatalog", () => {
+  it("with no deps registers only coperniqFirestoreIngest", () => {
+    const reg = bootstrapActionCatalog();
+    const names = reg.list().map((a) => a.name);
+    expect(names).toEqual(["coperniqFirestoreIngest"]);
+  });
+
+  it("with empty deps object registers only coperniqFirestoreIngest", () => {
+    const reg = bootstrapActionCatalog({});
+    const names = reg.list().map((a) => a.name);
+    expect(names).toEqual(["coperniqFirestoreIngest"]);
+  });
+
+  it("with slackClient but no botToken does not register Slack actions", () => {
+    const reg = bootstrapActionCatalog({ slackClient: makeSlackClient() });
+    const names = reg.list().map((a) => a.name);
+    expect(names).toEqual(["coperniqFirestoreIngest"]);
+  });
+
+  it("with both slackClient and botToken registers all 4 actions", () => {
+    const reg = bootstrapActionCatalog({ slackClient: makeSlackClient(), botToken: "xoxb-fake" });
+    const names = reg.list().map((a) => a.name);
+    expect(names).toContain("coperniqFirestoreIngest");
+    expect(names).toContain("dm_user");
+    expect(names).toContain("post_to_channel");
+    expect(names).toContain("reply_in_thread");
+    expect(names).toHaveLength(4);
+  });
+});

@@ -1,4 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { completeSimple, getEnvApiKey, getModel, type TextContent } from "@mariozechner/pi-ai";
 import SlackBolt from "@slack/bolt";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
@@ -15,6 +18,14 @@ import { warn } from "../../globals.js";
 import { installRequestBodyLimitGuard } from "../../infra/http-body.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
+import {
+  createSentinel,
+  ConversationStore,
+  openSentinelDb,
+  ChannelNameResolver,
+} from "../../sentinel/index.js";
+import { SLACK_USER_ALIASES } from "../../triage/actions/slack/aliases.js";
+import type { LlmClient } from "../../triage/llm-client.js";
 import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
@@ -25,9 +36,57 @@ import { normalizeAllowList } from "./allow-list.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
+import { fileAndProcessFollowup, followupsEnabled } from "./followup-bridge.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
+import { spawnFollowupTask } from "./triage-bridge.js";
 import type { MonitorSlackOpts } from "./types.js";
+
+function isTextBlock(block: { type: string }): block is TextContent {
+  return block.type === "text";
+}
+
+// Sentinel LLM client — same pi-ai wiring as triage-bridge, module-level singleton.
+const sentinelLlmClient: LlmClient = {
+  complete: async (prompt: string, opts?: { model?: string; temperature?: number }) => {
+    const modelId = opts?.model === "gemini-flash" ? "gemini-2.5-flash" : "gemini-2.5-pro";
+    const model = getModel("google", modelId);
+    const apiKey = getEnvApiKey("google") ?? "";
+    const res = await completeSimple(
+      model,
+      {
+        messages: [
+          {
+            role: "user",
+            content: prompt,
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      {
+        apiKey,
+        temperature: opts?.temperature ?? 0,
+        maxTokens: 4096,
+      },
+    );
+    return res.content
+      .filter(isTextBlock)
+      .map((b) => b.text)
+      .join("");
+  },
+};
+
+/**
+ * Extract Slack channel IDs from the current channelsConfig that should be
+ * observed by the sentinel. Only includes IDs that look like real Slack IDs
+ * (start with C or G) and are not the wildcard key "*".
+ */
+function extractSentinelChannelIds(channelsConfig: Record<string, unknown> | undefined): string[] {
+  if (!channelsConfig) {
+    return [];
+  }
+  return Object.keys(channelsConfig).filter((k) => k !== "*" && /^[CG][A-Z0-9]+$/i.test(k));
+}
 
 const slackBoltModule = SlackBolt as typeof import("@slack/bolt") & {
   default?: typeof import("@slack/bolt");
@@ -226,7 +285,32 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   const handleSlackMessage = createSlackMessageHandler({ ctx, account });
 
-  registerSlackMonitorEvents({ ctx, account, handleSlackMessage });
+  // Open sentinel db and build ConversationStore early so the message handler can route
+  // inquiry replies before triage. The full sentinel scheduler is started after app.start().
+  const sentinelDbPath = join(homedir(), ".openclaw/sentinel.db");
+  const sentinelDb = openSentinelDb(sentinelDbPath);
+  const conversationStore = new ConversationStore(sentinelDb);
+  const channelResolver = new ChannelNameResolver(app.client);
+  const conversationReplyDeps = {
+    store: conversationStore,
+    llm: sentinelLlmClient,
+    db: sentinelDb,
+    postMessage: async (channel: string, text: string) => {
+      await app.client.chat.postMessage({ token: botToken, channel, text });
+    },
+    kalebUserId: "U07KRVD2867",
+    channelResolver,
+    ...(followupsEnabled()
+      ? {
+          fileFollowup: async (input: Parameters<typeof fileAndProcessFollowup>[1]) => {
+            await fileAndProcessFollowup(ctx, input);
+          },
+          userAliases: SLACK_USER_ALIASES,
+        }
+      : {}),
+  };
+
+  registerSlackMonitorEvents({ ctx, account, handleSlackMessage, conversationReplyDeps });
   await registerSlackMonitorSlashCommands({ ctx, account });
   if (slackMode === "http" && slackHttpHandler) {
     unregisterHttpHandler = registerSlackHttpHandler({
@@ -349,6 +433,41 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     } else {
       runtime.log?.(`slack http mode listening at ${slackWebhookPath}`);
     }
+
+    // Start Sentinel JR scheduler after Slack is connected.
+    // Gated by OPENCLAW_SENTINEL_ENABLED=1 inside SentinelScheduler.start().
+    const dmUserFn = async (userId: string, text: string) => {
+      await app.client.chat.postMessage({
+        token: botToken,
+        channel: userId,
+        text,
+      });
+    };
+    const sentinel = createSentinel({
+      llm: sentinelLlmClient,
+      slackClient: app.client,
+      allowedSlackChannels: extractSentinelChannelIds(ctx.channelsConfig),
+      triageDbPath: join(homedir(), ".openclaw/triage.db"),
+      kalebUserId: "U07KRVD2867",
+      ridgeUserId: undefined, // TODO: fill from config when known
+      dmUser: dmUserFn,
+      sentinelDbPath,
+      spawnTask: (input) => spawnFollowupTask(input, ctx),
+    });
+    sentinel.scheduler.start();
+    runtime.log?.("[sentinel] scheduler started (interval: 2h, flag: OPENCLAW_SENTINEL_ENABLED)");
+
+    // Optional boot-trigger: fire one cycle immediately. Set
+    // OPENCLAW_SENTINEL_BOOT_CYCLE=1 in ~/.openclaw/.env then restart.
+    // Useful for verifying the pipeline without waiting 2h for the next tick.
+    if (process.env.OPENCLAW_SENTINEL_BOOT_CYCLE === "1") {
+      runtime.log?.("[sentinel] boot-cycle requested — firing runCycleOnce immediately");
+      sentinel
+        .runCycleOnce()
+        .then(() => runtime.log?.("[sentinel] boot-cycle complete"))
+        .catch((err) => runtime.error?.(`[sentinel] boot-cycle failed: ${(err as Error).message}`));
+    }
+
     if (opts.abortSignal?.aborted) {
       return;
     }

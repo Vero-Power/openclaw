@@ -1,6 +1,10 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { completeSimple, getEnvApiKey, getModel, type TextContent } from "@mariozechner/pi-ai";
+import { openSentinelDb } from "../../sentinel/db.js";
+import type { SpawnTaskInput } from "../../sentinel/followup-processor.js";
+import type { SlackClientLike } from "../../triage/actions/index.js";
+import { SLACK_USER_ALIASES } from "../../triage/actions/slack/aliases.js";
 import {
   Classifier,
   Planner,
@@ -15,6 +19,12 @@ import type { LlmClient } from "../../triage/llm-client.js";
 import type { Plan } from "../../triage/types.js";
 import type { SlackMessageEvent } from "../types.js";
 import type { SlackMonitorContext } from "./context.js";
+import {
+  ConversationContextBuilder,
+  convoContextEnabled,
+  type ConversationContext,
+} from "./conversation-context.js";
+import { fileAndProcessFollowup, followupsEnabled } from "./followup-bridge.js";
 
 function isTextBlock(block: { type: string }): block is TextContent {
   return block.type === "text";
@@ -56,6 +66,7 @@ let lazyStore: SessionStore | null = null;
 let lazyRegistry: ReturnType<typeof bootstrapActionCatalog> | null = null;
 let lazyClassifier: Classifier | null = null;
 let lazyPlanner: Planner | null = null;
+let lazyContextBuilder: ConversationContextBuilder | null = null;
 
 const STALE_SESSION_IDLE_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -67,9 +78,12 @@ function getStore(): SessionStore {
   return lazyStore;
 }
 
-function getRegistry(): ReturnType<typeof bootstrapActionCatalog> {
+function getRegistry(
+  slackClient?: SlackClientLike,
+  botToken?: string,
+): ReturnType<typeof bootstrapActionCatalog> {
   if (!lazyRegistry) {
-    lazyRegistry = bootstrapActionCatalog();
+    lazyRegistry = bootstrapActionCatalog({ slackClient, botToken });
   }
   return lazyRegistry;
 }
@@ -83,9 +97,49 @@ function getClassifier(): Classifier {
 
 function getPlanner(): Planner {
   if (!lazyPlanner) {
-    lazyPlanner = new Planner(llmClient, getRegistry());
+    lazyPlanner = new Planner(llmClient, getRegistry(), { userAliases: SLACK_USER_ALIASES });
   }
   return lazyPlanner;
+}
+
+function getContextBuilder(ctx: SlackMonitorContext): ConversationContextBuilder {
+  if (!lazyContextBuilder) {
+    lazyContextBuilder = new ConversationContextBuilder({
+      client: {
+        conversations: {
+          history: (args) => ctx.app.client.conversations.history(args),
+          replies: (args) => ctx.app.client.conversations.replies(args),
+        },
+      },
+      botToken: ctx.botToken,
+      botUserId: ctx.botUserId,
+      resolveUserName: (userId) => ctx.resolveUserName(userId),
+      db: openSentinelDb(join(homedir(), ".openclaw/sentinel.db")),
+    });
+  }
+  return lazyContextBuilder;
+}
+
+const EMPTY_CONTEXT: ConversationContext = { full: "", history: "" };
+
+async function buildConvoContext(
+  event: SlackMessageEvent,
+  ctx: SlackMonitorContext,
+): Promise<ConversationContext> {
+  if (!convoContextEnabled()) {
+    return EMPTY_CONTEXT;
+  }
+  try {
+    return await getContextBuilder(ctx).build({
+      channel: event.channel,
+      threadTs: event.thread_ts,
+      userId: event.user ?? "",
+      excludeTs: event.ts,
+    });
+  } catch (err) {
+    ctx.runtime.log(`[context] build failed: ${String(err)}`);
+    return EMPTY_CONTEXT;
+  }
 }
 
 /**
@@ -108,38 +162,49 @@ export async function runTriagePipeline(
     requester_message: event.text ?? "",
   });
 
-  const c = await getClassifier().classify(event.text ?? "");
+  const convoContext = await buildConvoContext(event, ctx);
+  const c = await getClassifier().classify(event.text ?? "", convoContext.full || undefined);
   getStore().setClassifierOutput(session.request_id, c);
   getStore().transition(session.request_id, "CLASSIFIED");
 
   if (!c.is_task) {
     // Not a task — cancel the session and route to chat-v2 (reasoner + responder)
     getStore().transition(session.request_id, "CANCELLED");
-    const isDm = event.channel?.startsWith("D") ?? false;
-    await handleChatMessage(
-      {
-        userMessage: event.text ?? "",
-        channel: event.channel,
-        threadTs: event.thread_ts ?? event.ts,
-        isDm,
-      },
-      {
-        llm: llmClient,
-        slackPost: async (params) => {
-          await ctx.app.client.chat.postMessage({
-            token: ctx.botToken,
-            channel: params.channel,
-            thread_ts: params.thread_ts,
-            text: params.text,
-          });
-        },
-      },
-    );
+    await routeToChat(event, ctx, convoContext);
     return true;
   }
 
   getStore().transition(session.request_id, "PLANNING");
-  const plan = await getPlanner().plan(event.text ?? "");
+
+  // Seed the registry with the live Slack client on first call (no-op on subsequent calls
+  // because getRegistry() memoises after the first invocation).
+  getRegistry(ctx.app.client as SlackClientLike, ctx.botToken);
+
+  let plan: Plan;
+  try {
+    plan = await getPlanner().plan(event.text ?? "", convoContext.full || undefined);
+  } catch (planErr) {
+    // F-A: planner failed (e.g. produced an unknown action, invalid args, unparseable JSON).
+    // Cancel the session and fall through to chat-v2 so the user gets a coherent response.
+    ctx.runtime.log(
+      `[triage] planner error — cancelling session ${session.request_id} and falling back to chat-v2: ${String(planErr)}`,
+    );
+    getStore().transition(session.request_id, "CANCELLED");
+    await routeToChat(event, ctx, convoContext);
+    return true;
+  }
+
+  // Empty-plan fallthrough: planner emitted no steps because no catalog action fit.
+  // The request is informational — route to chat-v2 to answer from JR's knowledge.
+  if (plan.steps.length === 0) {
+    ctx.runtime.log(
+      `[triage] empty plan from planner — request is informational, falling back to chat-v2 for session ${session.request_id}`,
+    );
+    getStore().transition(session.request_id, "CANCELLED");
+    await routeToChat(event, ctx, convoContext);
+    return true;
+  }
+
   getStore().setFinalPlan(session.request_id, plan);
   getStore().appendPlanHistory(session.request_id, { plan, edit_text: null, ts: Date.now() });
 
@@ -211,7 +276,11 @@ export async function handleThreadReplyForActiveTriage(
         });
       },
     };
-    const exec = new Executor({ store: getStore(), registry: getRegistry(), slack: slackBridge });
+    const exec = new Executor({
+      store: getStore(),
+      registry: getRegistry(ctx.app.client as SlackClientLike, ctx.botToken),
+      slack: slackBridge,
+    });
     await exec.run(active.request_id);
   } else if (signal.kind === "cancel") {
     getStore().transition(active.request_id, "CANCELLED");
@@ -223,10 +292,12 @@ export async function handleThreadReplyForActiveTriage(
     });
   } else if (signal.kind === "edit") {
     getStore().transition(active.request_id, "EDITING");
+    const convoContext = await buildConvoContext(event, ctx);
     const newPlan = await getPlanner().replan(
       active.requester_message,
       active.final_plan!,
       signal.edit_text,
+      convoContext.full || undefined,
     );
     const diff = getPlanner().renderDiff(active.final_plan!, newPlan);
     if (active.progress_ts) {
@@ -249,6 +320,51 @@ export async function handleThreadReplyForActiveTriage(
   return true;
 }
 
+async function routeToChat(
+  event: SlackMessageEvent,
+  ctx: SlackMonitorContext,
+  convoContext?: ConversationContext,
+): Promise<void> {
+  const isDm = event.channel?.startsWith("D") ?? false;
+  await handleChatMessage(
+    {
+      userMessage: event.text ?? "",
+      channel: event.channel,
+      threadTs: event.thread_ts ?? event.ts,
+      isDm,
+      requesterUserId: event.user,
+      convoContext: convoContext && convoContext.full !== "" ? convoContext : undefined,
+    },
+    {
+      llm: llmClient,
+      slackPost: async (params) => {
+        await ctx.app.client.chat.postMessage({
+          token: ctx.botToken,
+          channel: params.channel,
+          thread_ts: params.thread_ts,
+          text: params.text,
+        });
+      },
+      ...(followupsEnabled()
+        ? {
+            fileFollowup: (f: {
+              kind: "dm_person" | "note" | "task";
+              payload: Record<string, unknown>;
+            }) =>
+              fileAndProcessFollowup(ctx, {
+                kind: f.kind,
+                payload: f.payload,
+                source: "chat",
+                sourceRef: `${event.channel}:${event.ts ?? ""}`,
+                requesterUserId: event.user,
+              }),
+            followupAliases: Object.keys(SLACK_USER_ALIASES),
+          }
+        : {}),
+    },
+  );
+}
+
 function renderPlanForApproval(plan: Plan): string {
   const lines = [
     `📋 *Plan:* _${plan.summary}_ (confidence ${Math.round(plan.confidence * 100)}%)`,
@@ -259,4 +375,38 @@ function renderPlanForApproval(plan: Plan): string {
   });
   lines.push("", "Reply *yes* / *go* to approve, *no* / *cancel* to abort, or describe an edit.");
   return lines.join("\n");
+}
+
+/**
+ * Spawn a triage session for a queued `task` follow-up. Opens a DM with the requester,
+ * posts an anchor message, then runs the normal triage pipeline with the anchor ts as
+ * the thread root — so plan approval ("yes" in the thread) reuses the existing
+ * handleThreadReplyForActiveTriage flow unchanged.
+ */
+export async function spawnFollowupTask(
+  input: SpawnTaskInput,
+  ctx: SlackMonitorContext,
+): Promise<void> {
+  const opened = await ctx.app.client.conversations.open({
+    token: ctx.botToken,
+    users: input.requesterUserId,
+  });
+  const channel = (opened as { channel?: { id?: string } }).channel?.id;
+  if (!channel) {
+    throw new Error(`could not open DM with ${input.requesterUserId}`);
+  }
+  const introText = `Following up on your earlier request${input.context ? ` (${input.context})` : ""}: *${input.taskText}*\nWorking on a plan — I'll post it in this thread.`;
+  const intro = await ctx.app.client.chat.postMessage({
+    token: ctx.botToken,
+    channel,
+    text: introText,
+  });
+  const syntheticEvent: SlackMessageEvent = {
+    type: "message",
+    channel,
+    user: input.requesterUserId,
+    text: input.taskText,
+    ts: intro.ts ?? String(Date.now() / 1000),
+  };
+  await runTriagePipeline(syntheticEvent, ctx);
 }

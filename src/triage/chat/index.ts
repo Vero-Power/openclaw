@@ -19,6 +19,13 @@ function loadPersona(): string {
 export interface ChatHandlerDeps {
   llm: LlmClient;
   slackPost: (params: { channel: string; thread_ts?: string; text: string }) => Promise<void>;
+  // Files one follow-up; resolves to a short human description ("queued a DM to ridge
+  // about X") or null when filing failed. Presence of this dep enables follow-ups.
+  fileFollowup?: (f: {
+    kind: "dm_person" | "note" | "task";
+    payload: Record<string, unknown>;
+  }) => Promise<string | null>;
+  followupAliases?: string[];
 }
 
 export async function handleChatMessage(
@@ -27,7 +34,8 @@ export async function handleChatMessage(
     channel: string;
     threadTs?: string;
     isDm: boolean;
-    recentThread?: string[];
+    convoContext?: { full: string; history: string };
+    requesterUserId?: string;
   },
   deps: ChatHandlerDeps,
 ): Promise<void> {
@@ -36,12 +44,35 @@ export async function handleChatMessage(
 
   const reasoned = await reasoner.reason({
     userMessage: input.userMessage,
-    recentThread: input.recentThread,
+    contextBlock: input.convoContext?.full,
+    followups: deps.fileFollowup ? { knownAliases: deps.followupAliases ?? [] } : undefined,
   });
+
+  const queuedActions: string[] = [];
+  let failedToQueue = false;
+  if (deps.fileFollowup && reasoned.followups && reasoned.followups.length > 0) {
+    const fileFollowup = deps.fileFollowup;
+    for (const f of reasoned.followups) {
+      try {
+        const description = await fileFollowup({ kind: f.kind, payload: f.payload });
+        if (description) {
+          queuedActions.push(description);
+        } else {
+          failedToQueue = true;
+        }
+      } catch {
+        failedToQueue = true;
+      }
+    }
+  }
+
   const reply = await responder.respond({
     userMessage: input.userMessage,
     findings: reasoned.findings,
     persona: loadPersona(),
+    queuedActions,
+    failedToQueue,
+    conversationHistory: input.convoContext?.history,
   });
 
   await deps.slackPost({

@@ -41,4 +41,19 @@ describe("Classifier", () => {
     expect(out.is_task).toBe(false);
     expect(out.confidence).toBe(0.95);
   });
+
+  it("includes conversation context in the prompt when provided", async () => {
+    const complete = vi.fn().mockResolvedValue('{"is_task": false, "confidence": 0.9}');
+    const classifier = new Classifier({ complete });
+    await classifier.classify("did you send it?", "JR: I've queued a message to Ridge.");
+    expect(complete.mock.calls[0][0]).toContain("I've queued a message to Ridge.");
+    expect(complete.mock.calls[0][0]).toContain("already did");
+  });
+
+  it("omits the context block when context is absent", async () => {
+    const complete = vi.fn().mockResolvedValue('{"is_task": false, "confidence": 0.9}');
+    const classifier = new Classifier({ complete });
+    await classifier.classify("hello");
+    expect(complete.mock.calls[0][0]).not.toContain("Conversation context");
+  });
 });

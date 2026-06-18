@@ -1,3 +1,4 @@
+import type { ConversationReplyDeps } from "../../sentinel/conversation-handler.js";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import type { SlackMonitorContext } from "./context.js";
 import { registerSlackChannelEvents } from "./events/channels.js";
@@ -12,10 +13,12 @@ export function registerSlackMonitorEvents(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
   handleSlackMessage: SlackMessageHandler;
+  conversationReplyDeps?: ConversationReplyDeps;
 }) {
   registerSlackMessageEvents({
     ctx: params.ctx,
     handleSlackMessage: params.handleSlackMessage,
+    conversationReplyDeps: params.conversationReplyDeps,
   });
   registerSlackReactionEvents({ ctx: params.ctx });
   registerSlackMemberEvents({ ctx: params.ctx });
