@@ -118,6 +118,25 @@ function readPriorObservation(db: DatabaseType): PriorObservation | null {
   }
 }
 
+function composeSummary(opts: {
+  functionCount: number;
+  invocationsTotal: number;
+  errorsTotal: number;
+  functions: Array<{ name: string; errors: number }>;
+}): string {
+  const head = `${opts.functionCount} functions: ${opts.invocationsTotal} invocations, ${opts.errorsTotal} errors`;
+  if (opts.errorsTotal === 0) {
+    return `${head}. Window: 2h.`;
+  }
+  const topErrors = opts.functions
+    .filter((f) => f.errors > 0)
+    .toSorted((a, b) => b.errors - a.errors)
+    .slice(0, 4)
+    .map((f) => `${f.name} ${f.errors}`)
+    .join(", ");
+  return `${head} (${topErrors}). Window: 2h.`;
+}
+
 function computeDeltas(
   current: Array<{ name: string; invocations: number; errors: number }>,
   prior: PriorObservation,
@@ -199,7 +218,12 @@ export function createGcpFunctionsObserver(deps: GcpFunctionsObserverDeps): Obse
           source: "gcp-functions",
           topic: "gcp-functions",
           timestamp: now,
-          summary: `${functions.length} functions: ${invocations_total} invocations, ${errors_total} errors. Window: 2h.`,
+          summary: composeSummary({
+            functionCount: functions.length,
+            invocationsTotal: invocations_total,
+            errorsTotal: errors_total,
+            functions: functions.map((f) => ({ name: f.name, errors: f.errors })),
+          }),
           data: {
             windowStartIso,
             windowEndIso,

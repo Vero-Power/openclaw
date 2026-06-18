@@ -258,3 +258,85 @@ describe("createGcpFunctionsObserver — deltas", () => {
     expect(metricKeys.some((k) => k.startsWith("delta_"))).toBe(false);
   });
 });
+
+describe("createGcpFunctionsObserver — summary text", () => {
+  let dbPath: string;
+  let db: DatabaseType;
+
+  beforeEach(() => {
+    dbPath = tmpSentinelDb();
+    db = openSentinelDb(dbPath);
+  });
+  afterEach(() => {
+    db.close();
+    cleanupDb(dbPath);
+  });
+
+  it("zero-errors summary", async () => {
+    const client = makeFakeClient({
+      bomQuoteNotifier: [
+        { timestamp: "2026-06-17T20:30:00Z", severity: "INFO", text: "ok" },
+        { timestamp: "2026-06-17T20:31:00Z", severity: "INFO", text: "ok" },
+      ],
+    });
+    const obs = createGcpFunctionsObserver({ db, getClient: async () => client });
+    const out = await obs.observe(0);
+    expect(out[0].summary).toBe("6 functions: 2 invocations, 0 errors. Window: 2h.");
+  });
+
+  it("with-errors summary ranks top contributors by error count", async () => {
+    const client = makeFakeClient({
+      bomQuoteNotifier: [
+        { timestamp: "2026-06-17T20:30:00Z", severity: "ERROR", text: "a" },
+        { timestamp: "2026-06-17T20:31:00Z", severity: "ERROR", text: "b" },
+      ],
+      ghlFirestoreIngest: [{ timestamp: "2026-06-17T20:45:00Z", severity: "ERROR", text: "c" }],
+      slackFirestoreIngest: [{ timestamp: "2026-06-17T20:50:00Z", severity: "INFO", text: "ok" }],
+    });
+    const obs = createGcpFunctionsObserver({ db, getClient: async () => client });
+    const out = await obs.observe(0);
+    expect(out[0].summary).toMatch(/^6 functions: 4 invocations, 3 errors /);
+    expect(out[0].summary).toContain("bomQuoteNotifier 2");
+    expect(out[0].summary).toContain("ghlFirestoreIngest 1");
+    const bomIdx = out[0].summary.indexOf("bomQuoteNotifier");
+    const ghlIdx = out[0].summary.indexOf("ghlFirestoreIngest");
+    expect(bomIdx).toBeLessThan(ghlIdx);
+  });
+});
+
+describe("createGcpFunctionsObserver — error propagation", () => {
+  let dbPath: string;
+  let db: DatabaseType;
+
+  beforeEach(() => {
+    dbPath = tmpSentinelDb();
+    db = openSentinelDb(dbPath);
+  });
+  afterEach(() => {
+    db.close();
+    cleanupDb(dbPath);
+  });
+
+  it("throws when getClient throws", async () => {
+    const obs = createGcpFunctionsObserver({
+      db,
+      getClient: async () => {
+        throw new Error("client init failed");
+      },
+    });
+    await expect(obs.observe(0)).rejects.toThrow(/client init failed/);
+  });
+
+  it("throws when any per-function call throws", async () => {
+    const client: LoggingLike = {
+      listFunctionEntries: async (name) => {
+        if (name === "ghlFirestoreIngest") {
+          throw new Error("logging boom");
+        }
+        return [];
+      },
+    };
+    const obs = createGcpFunctionsObserver({ db, getClient: async () => client });
+    await expect(obs.observe(0)).rejects.toThrow(/logging boom/);
+  });
+});
