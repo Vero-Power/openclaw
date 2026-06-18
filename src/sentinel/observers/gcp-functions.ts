@@ -161,16 +161,70 @@ function computeDeltas(
   return out;
 }
 
+const GCP_FUNCTIONS_PROJECT_ID = "openclaw-mail-bridge";
+
+async function defaultClientFactoryAsync(): Promise<LoggingLike> {
+  const { Logging } = await import("@google-cloud/logging");
+  const logging = new Logging({ projectId: GCP_FUNCTIONS_PROJECT_ID });
+
+  return {
+    async listFunctionEntries(serviceName: string, sinceIso: string): Promise<LogEntry[]> {
+      const filter =
+        `((resource.type="cloud_run_revision" AND resource.labels.service_name="${serviceName}") ` +
+        `OR (resource.type="cloud_function" AND resource.labels.function_name="${serviceName}")) ` +
+        `AND timestamp >= "${sinceIso}"`;
+      const [entries] = await logging.getEntries({
+        filter,
+        orderBy: "timestamp desc",
+        pageSize: 1000,
+      });
+      return entries.map((e) => {
+        const meta = (e.metadata ?? {}) as {
+          timestamp?: string | { seconds?: number | string; nanos?: number };
+          severity?: string;
+        };
+        let timestamp: string;
+        if (typeof meta.timestamp === "string") {
+          timestamp = meta.timestamp;
+        } else if (
+          meta.timestamp &&
+          typeof meta.timestamp === "object" &&
+          "seconds" in meta.timestamp
+        ) {
+          const seconds = Number(meta.timestamp.seconds ?? 0);
+          const nanos = meta.timestamp.nanos ?? 0;
+          timestamp = new Date(seconds * 1000 + Math.floor(nanos / 1_000_000)).toISOString();
+        } else {
+          timestamp = new Date().toISOString();
+        }
+        const severity = meta.severity ?? "DEFAULT";
+        const raw = (e as { data?: unknown }).data;
+        const text = typeof raw === "string" ? raw : JSON.stringify(raw ?? {});
+        return { timestamp, severity, text };
+      });
+    },
+  };
+}
+
 export function createGcpFunctionsObserver(deps: GcpFunctionsObserverDeps): Observer {
+  let cachedClient: LoggingLike | null = null;
+
+  async function resolveClient(): Promise<LoggingLike> {
+    if (deps.getClient) {
+      return deps.getClient();
+    }
+    if (cachedClient) {
+      return cachedClient;
+    }
+    const factory = deps.clientFactory ?? defaultClientFactoryAsync;
+    cachedClient = await factory();
+    return cachedClient;
+  }
+
   return {
     name: "gcp-functions",
     async observe(_since: number): Promise<Omit<Observation, "id" | "created_at">[]> {
-      const getClient =
-        deps.getClient ??
-        (async () => {
-          throw new Error("default Logging client not yet wired (see Task 6 in plan)");
-        });
-      const client = await getClient();
+      const client = await resolveClient();
 
       const now = Date.now();
       const windowStartIso = new Date(now - WINDOW_MS).toISOString();

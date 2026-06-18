@@ -340,3 +340,31 @@ describe("createGcpFunctionsObserver — error propagation", () => {
     await expect(obs.observe(0)).rejects.toThrow(/logging boom/);
   });
 });
+
+describe("createGcpFunctionsObserver — default Logging client", () => {
+  let dbPath: string;
+  let db: DatabaseType;
+
+  beforeEach(() => {
+    dbPath = tmpSentinelDb();
+    db = openSentinelDb(dbPath);
+  });
+  afterEach(() => {
+    db.close();
+    cleanupDb(dbPath);
+  });
+
+  it("calls clientFactory once and caches the client across cycles", async () => {
+    let clientBuilds = 0;
+    const obs = createGcpFunctionsObserver({
+      db,
+      clientFactory: () => {
+        clientBuilds++;
+        return makeFakeClient();
+      },
+    });
+    await obs.observe(0);
+    await obs.observe(0);
+    expect(clientBuilds).toBe(1);
+  });
+});
