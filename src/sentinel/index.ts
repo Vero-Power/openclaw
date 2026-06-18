@@ -14,6 +14,7 @@ import { Monetizer } from "./monetizer.js";
 import { runObservers } from "./observer-runner.js";
 import { ObserverRegistry } from "./observer.js";
 import { createCoperniqObserver } from "./observers/coperniq.js";
+import { createGcpFunctionsObserver } from "./observers/gcp-functions.js";
 import { createIndustryContextObserver } from "./observers/industry-context.js";
 import { createLaunchAgentsObserver } from "./observers/launchagents.js";
 import { createSelfObserver } from "./observers/self.js";
@@ -75,6 +76,7 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
   registry.register(createLaunchAgentsObserver({ filterPrefix: "openclaw" }));
   registry.register(createWeatherObserver());
   registry.register(createCoperniqObserver({ db }));
+  registry.register(createGcpFunctionsObserver({ db }));
   registry.register(createIndustryContextObserver({ llm: deps.llm }));
 
   const conversationStore = new ConversationStore(db);
