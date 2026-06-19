@@ -120,6 +120,32 @@ CREATE TABLE IF NOT EXISTS followups (
 );
 
 CREATE INDEX IF NOT EXISTS idx_followups_status ON followups(status);
+
+CREATE TABLE IF NOT EXISTS oracle_recommendations (
+  id                TEXT PRIMARY KEY,
+  assignee_email    TEXT NOT NULL,
+  assignee_slack_id TEXT,
+  title             TEXT NOT NULL,
+  rationale         TEXT NOT NULL,
+  evidence          TEXT NOT NULL,
+  scope             TEXT NOT NULL,
+  urgency           TEXT NOT NULL,
+  confidence        TEXT NOT NULL,
+  data              TEXT NOT NULL,
+  first_seen_at     INTEGER NOT NULL,
+  last_seen_at      INTEGER NOT NULL,
+  dismissed_at      INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS oracle_recommendations_assignee
+  ON oracle_recommendations(assignee_email, last_seen_at DESC);
+
+CREATE TABLE IF NOT EXISTS oracle_dms_sent (
+  rec_id          TEXT NOT NULL,
+  assignee_email  TEXT NOT NULL,
+  sent_at         INTEGER NOT NULL,
+  PRIMARY KEY (rec_id, assignee_email)
+);
 `;
 
 // One connection per path: several subsystems (sentinel cycle, followup bridge)

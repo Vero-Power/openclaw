@@ -1,7 +1,8 @@
 import { existsSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it, expect, afterEach } from "vitest";
+import type { Database as DatabaseType } from "better-sqlite3";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { openSentinelDb } from "../../src/sentinel/db.js";
 
 const TEST_DB = join(tmpdir(), `sentinel-test-${Date.now()}.db`);
@@ -89,5 +90,71 @@ describe("sentinel db", () => {
       "last_error",
     ]);
     db.close();
+  });
+});
+
+describe("openSentinelDb — oracle tables migration", () => {
+  let dbPath: string;
+  let db: DatabaseType;
+
+  beforeEach(() => {
+    dbPath = join(
+      tmpdir(),
+      `sentinel-oracle-${Date.now()}-${Math.random().toString(36).slice(2)}.db`,
+    );
+    db = openSentinelDb(dbPath);
+  });
+
+  afterEach(() => {
+    db.close();
+    for (const suffix of ["", "-shm", "-wal"]) {
+      const f = `${dbPath}${suffix}`;
+      if (existsSync(f)) {
+        unlinkSync(f);
+      }
+    }
+  });
+
+  it("creates oracle_recommendations table with all required columns", () => {
+    const cols = db.prepare("PRAGMA table_info(oracle_recommendations)").all() as Array<{
+      name: string;
+      type: string;
+    }>;
+    const names = cols.map((c) => c.name).toSorted();
+    expect(names).toEqual([
+      "assignee_email",
+      "assignee_slack_id",
+      "confidence",
+      "data",
+      "dismissed_at",
+      "evidence",
+      "first_seen_at",
+      "id",
+      "last_seen_at",
+      "rationale",
+      "scope",
+      "title",
+      "urgency",
+    ]);
+  });
+
+  it("creates the assignee+last_seen_at index", () => {
+    const indexes = db.prepare("PRAGMA index_list(oracle_recommendations)").all() as Array<{
+      name: string;
+    }>;
+    const names = indexes.map((i) => i.name);
+    expect(names).toContain("oracle_recommendations_assignee");
+  });
+
+  it("creates oracle_dms_sent table with composite primary key", () => {
+    const cols = db.prepare("PRAGMA table_info(oracle_dms_sent)").all() as Array<{
+      name: string;
+      pk: number;
+    }>;
+    const pkCols = cols
+      .filter((c) => c.pk > 0)
+      .map((c) => c.name)
+      .toSorted();
+    expect(pkCols).toEqual(["assignee_email", "rec_id"]);
   });
 });
