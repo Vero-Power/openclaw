@@ -112,6 +112,7 @@
     "@buape/carbon": "0.14.0",
     "@clack/prompts": "^1.0.1",
     "@google-cloud/firestore": "^8.6.0",
+    "@google-cloud/logging": "^11.2.3",
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.5",
