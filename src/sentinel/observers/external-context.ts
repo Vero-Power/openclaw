@@ -47,6 +47,113 @@ const DEFAULT_BUDGET: ResearchBudget = {
 
 const DEFAULT_TIMEOUT_MS = 90_000;
 
+const GEMINI_MODEL = "gemini-2.5-flash";
+
+async function defaultResearcherFactory(): Promise<Researcher> {
+  const { GoogleGenAI } = await import("@google/genai");
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY not set; cannot construct default external-context Researcher");
+  }
+  const client = new GoogleGenAI({ apiKey });
+
+  return {
+    async research(opts): Promise<ResearchResult> {
+      const trace: ResearchTraceEntry[] = [];
+      let tokensConsumed = 0;
+      let turn = 0;
+
+      const tools = [{ googleSearch: {} }];
+
+      // Multi-turn loop. Gemini handles google_search execution natively;
+      // we just send the conversation history and read back the model's reply.
+      // Conversation starts with the system prompt as the first user turn
+      // (Gemini doesn't have a separate system role for this SDK shape).
+      type Content = { role: "user" | "model"; parts: Array<{ text: string }> };
+      const history: Content[] = [{ role: "user", parts: [{ text: opts.systemPrompt }] }];
+
+      let finalText: string | null = null;
+      while (turn < opts.budget.maxTurns && tokensConsumed < opts.budget.maxTokens) {
+        turn++;
+        const response = await client.models.generateContent({
+          model: GEMINI_MODEL,
+          contents: history,
+          config: { tools },
+        });
+
+        const usage = response.usageMetadata;
+        if (usage) {
+          tokensConsumed += usage.totalTokenCount ?? 0;
+        }
+
+        const candidate = response.candidates?.[0];
+        const text =
+          candidate?.content?.parts
+            ?.map((p) =>
+              typeof p === "object" && p !== null && "text" in p
+                ? ((p as { text?: string }).text ?? "")
+                : "",
+            )
+            .join("") ?? "";
+
+        // Capture grounding queries if present
+        const groundingQueries = candidate?.groundingMetadata?.webSearchQueries ?? [];
+        if (groundingQueries.length > 0) {
+          for (const q of groundingQueries) {
+            trace.push({ turn, action: "search", query: q });
+          }
+        }
+
+        // Treat any text that contains a JSON object with a top-level "findings"
+        // array as the final answer.
+        const finalMatch = text.match(/\{[\s\S]*"findings"[\s\S]*\}/);
+        if (finalMatch) {
+          finalText = finalMatch[0];
+          trace.push({ turn, action: "finalize" });
+          break;
+        }
+
+        // Otherwise treat the model reply as an intermediate "summary of findings"
+        // step and append to history so the loop continues. (Gemini already
+        // ran the search natively; we just feed the model's text back.)
+        if (text.trim().length > 0) {
+          history.push({ role: "model", parts: [{ text }] });
+          // Nudge the model to either dive or finalize.
+          history.push({
+            role: "user",
+            parts: [
+              {
+                text: "Continue. Either issue another targeted google_search query if you found something material to dive into, or return your final JSON findings now.",
+              },
+            ],
+          });
+        } else {
+          // No text at all — stop to avoid infinite loop.
+          break;
+        }
+      }
+
+      if (!finalText) {
+        // Budget exhausted before final JSON. Return empty findings; trace records what happened.
+        return { findings: [], trace };
+      }
+
+      let parsed: { findings: ExternalFinding[] };
+      try {
+        parsed = JSON.parse(finalText) as { findings: ExternalFinding[] };
+      } catch {
+        throw new Error("external-context: final JSON could not be parsed");
+      }
+
+      if (!Array.isArray(parsed.findings)) {
+        throw new Error("external-context: final JSON missing findings array");
+      }
+
+      return { findings: parsed.findings, trace };
+    },
+  };
+}
+
 const SYSTEM_PROMPT = `You are a solar industry analyst monitoring real-time developments that affect Vero — a US residential solar installer operating in Colorado, Texas, and Arizona.
 
 What matters to Vero:
@@ -85,11 +192,7 @@ export function createExternalContextObserver(deps: ExternalContextObserverDeps)
     if (cachedResearcher) {
       return cachedResearcher;
     }
-    const factory =
-      deps.researcherFactory ??
-      (() => {
-        throw new Error("default Researcher not yet wired (see Task 5 in plan)");
-      });
+    const factory = deps.researcherFactory ?? defaultResearcherFactory;
     cachedResearcher = await factory();
     return cachedResearcher;
   }
