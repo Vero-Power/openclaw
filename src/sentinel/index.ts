@@ -14,6 +14,7 @@ import { Monetizer } from "./monetizer.js";
 import { runObservers } from "./observer-runner.js";
 import { ObserverRegistry } from "./observer.js";
 import { createCoperniqObserver } from "./observers/coperniq.js";
+import { createExternalContextObserver } from "./observers/external-context.js";
 import { createGcpFunctionsObserver } from "./observers/gcp-functions.js";
 import { createIndustryContextObserver } from "./observers/industry-context.js";
 import { createLaunchAgentsObserver } from "./observers/launchagents.js";
@@ -77,6 +78,7 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
   registry.register(createWeatherObserver());
   registry.register(createCoperniqObserver({ db }));
   registry.register(createGcpFunctionsObserver({ db }));
+  registry.register(createExternalContextObserver({ db }));
   registry.register(createIndustryContextObserver({ llm: deps.llm }));
 
   const conversationStore = new ConversationStore(db);
@@ -117,8 +119,17 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
   let lastIdeasReportWeek: number | null = null;
 
   async function runCycleOnce(): Promise<void> {
-    // 0. Expire stale conversations (idle > 3 days → dropped)
-    conversationStore.expireStale(3 * 24 * 60 * 60 * 1000);
+    // 0. Expire stale conversations: drop when the PERSON's last reply is older
+    //    than the TTL. JR's own follow-up turns don't reset the timer. Inline check
+    //    in handleConversationReply uses the same rule and catches per-message
+    //    staleness between sweeps.
+    //    Override TTL with OPENCLAW_CONVO_STALE_HOURS (defaults to 1).
+    const staleHoursRaw = process.env.OPENCLAW_CONVO_STALE_HOURS;
+    const staleHours =
+      Number.isFinite(Number(staleHoursRaw)) && Number(staleHoursRaw) > 0
+        ? Number(staleHoursRaw)
+        : 1;
+    conversationStore.expireStale(staleHours * 60 * 60 * 1000);
 
     // 0.5 Drain pending follow-ups (collisions from earlier cycles, transient failures)
     if (process.env.OPENCLAW_FOLLOWUPS === "1") {
