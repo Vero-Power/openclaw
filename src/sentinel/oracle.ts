@@ -90,11 +90,13 @@ OUTPUT — JSON object only, no markdown fences:
 }
 
 Constraints:
-- 5-15 recommendations total.
+- 5-8 recommendations total. Pick the highest-signal ones.
 - Distribute across assignees - don't dump everything on one person.
 - Cite evidence; recommendations without any evidence are not acceptable.
 - Stick to assignees from the directory; if no good match exists, do not invent.
-- Emit an empty array if there is truly nothing actionable.`;
+- Keep rationale to 1-2 short sentences.
+- Emit an empty array if there is truly nothing actionable.
+- Return only the JSON object. No preamble, no markdown fences, no trailing prose.`;
 }
 
 function queryObservations(db: DatabaseType, sinceMs: number, limit: number): string[] {
@@ -184,7 +186,7 @@ export function createOracle(deps: OracleDeps): Oracle {
     const insightSnippets = queryInsights(deps.db, Date.now() - 14 * 24 * 60 * 60 * 1000, 20);
 
     const prompt = buildPrompt(companyContext, directory, observationSnippets, insightSnippets);
-    const raw = await deps.llm.complete(prompt, { model: "gemini-2.5-flash", temperature: 0.2 });
+    const raw = await deps.llm.complete(prompt, { model: "gemini-flash", temperature: 0.2 });
 
     const stripped = raw.trim().replace(/^```(?:json)?\n?|\n?```$/g, "");
     const parsed = JSON.parse(stripped) as { recommendations?: RawLlmRecommendation[] };
