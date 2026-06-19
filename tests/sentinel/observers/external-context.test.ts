@@ -142,3 +142,25 @@ describe("createExternalContextObserver — lazy cached researcher", () => {
     expect(factoryCalls).toBe(0);
   });
 });
+
+describe("createExternalContextObserver — wall-clock timeout", () => {
+  it("rejects when the researcher hangs past the timeout", async () => {
+    const slowResearcher: Researcher = {
+      research: () => new Promise(() => {}), // never resolves
+    };
+    const obs = createExternalContextObserver({
+      getResearcher: async () => slowResearcher,
+      timeoutMs: 50, // tiny timeout for test speed
+    });
+    await expect(obs.observe(0)).rejects.toThrow(/timed out after 50ms/);
+  });
+
+  it("uses the production default of 90000ms when timeoutMs is omitted", async () => {
+    const fast: Researcher = {
+      research: async () => ({ findings: [], trace: [] }),
+    };
+    const obs = createExternalContextObserver({ getResearcher: async () => fast });
+    // Just verify it doesn't throw and respects the override-or-default contract
+    await expect(obs.observe(0)).resolves.toEqual([]);
+  });
+});

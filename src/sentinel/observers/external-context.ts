@@ -36,6 +36,7 @@ export interface ExternalContextObserverDeps {
   db?: DatabaseType;
   getResearcher?: () => Promise<Researcher>;
   researcherFactory?: () => Promise<Researcher> | Researcher;
+  timeoutMs?: number;
 }
 
 const DEFAULT_BUDGET: ResearchBudget = {
@@ -43,6 +44,8 @@ const DEFAULT_BUDGET: ResearchBudget = {
   maxTokens: 30000,
   maxDivesPerTopic: 3,
 };
+
+const DEFAULT_TIMEOUT_MS = 90_000;
 
 const SYSTEM_PROMPT = `You are a solar industry analyst monitoring real-time developments that affect Vero — a US residential solar installer operating in Colorado, Texas, and Arizona.
 
@@ -95,10 +98,27 @@ export function createExternalContextObserver(deps: ExternalContextObserverDeps)
     name: "external-context",
     async observe(_since: number): Promise<Omit<Observation, "id" | "created_at">[]> {
       const researcher = await resolveResearcher();
-      const result = await researcher.research({
-        systemPrompt: SYSTEM_PROMPT,
-        budget: DEFAULT_BUDGET,
+      const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<never>((_resolve, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`external-context observer timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
       });
+
+      let result: ResearchResult;
+      try {
+        result = await Promise.race([
+          researcher.research({ systemPrompt: SYSTEM_PROMPT, budget: DEFAULT_BUDGET }),
+          timeoutPromise,
+        ]);
+      } finally {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
+      }
 
       if (result.findings.length === 0) {
         return [];
