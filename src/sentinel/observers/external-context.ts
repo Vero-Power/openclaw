@@ -73,15 +73,28 @@ When done, return a JSON object only (no markdown fences):
 Emit 3-5 findings if there is material signal; emit an empty array if nothing meaningful was found.`;
 
 export function createExternalContextObserver(deps: ExternalContextObserverDeps): Observer {
+  let cachedResearcher: Researcher | null = null;
+
+  async function resolveResearcher(): Promise<Researcher> {
+    if (deps.getResearcher) {
+      return deps.getResearcher();
+    }
+    if (cachedResearcher) {
+      return cachedResearcher;
+    }
+    const factory =
+      deps.researcherFactory ??
+      (() => {
+        throw new Error("default Researcher not yet wired (see Task 5 in plan)");
+      });
+    cachedResearcher = await factory();
+    return cachedResearcher;
+  }
+
   return {
     name: "external-context",
     async observe(_since: number): Promise<Omit<Observation, "id" | "created_at">[]> {
-      const getResearcher =
-        deps.getResearcher ??
-        (async () => {
-          throw new Error("default Researcher not yet wired (see Task 5 in plan)");
-        });
-      const researcher = await getResearcher();
+      const researcher = await resolveResearcher();
       const result = await researcher.research({
         systemPrompt: SYSTEM_PROMPT,
         budget: DEFAULT_BUDGET,

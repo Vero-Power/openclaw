@@ -106,3 +106,39 @@ describe("createExternalContextObserver — observer body", () => {
     await expect(obs.observe(0)).rejects.toThrow(/gemini boom/);
   });
 });
+
+describe("createExternalContextObserver — lazy cached researcher", () => {
+  it("calls researcherFactory once and caches across cycles", async () => {
+    let builds = 0;
+    const obs = createExternalContextObserver({
+      researcherFactory: () => {
+        builds++;
+        return {
+          research: async () => ({ findings: [], trace: [] }),
+        };
+      },
+    });
+    await obs.observe(0);
+    await obs.observe(0);
+    expect(builds).toBe(1);
+  });
+
+  it("getResearcher takes precedence over researcherFactory and is NOT cached", async () => {
+    let getCalls = 0;
+    let factoryCalls = 0;
+    const obs = createExternalContextObserver({
+      getResearcher: async () => {
+        getCalls++;
+        return { research: async () => ({ findings: [], trace: [] }) };
+      },
+      researcherFactory: () => {
+        factoryCalls++;
+        return { research: async () => ({ findings: [], trace: [] }) };
+      },
+    });
+    await obs.observe(0);
+    await obs.observe(0);
+    expect(getCalls).toBe(2);
+    expect(factoryCalls).toBe(0);
+  });
+});
