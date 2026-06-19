@@ -11,6 +11,7 @@ function makeFakeClient(
     countProjectsByField: overrides.countProjectsByField ?? (async () => ({})),
     sumProjectValue: overrides.sumProjectValue ?? (async () => 0),
     countWorkOrdersByStatus: overrides.countWorkOrdersByStatus ?? (async () => ({})),
+    listProjectAssignees: overrides.listProjectAssignees ?? (async () => []),
   };
 }
 

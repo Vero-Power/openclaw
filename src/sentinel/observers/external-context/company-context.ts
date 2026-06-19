@@ -2,6 +2,9 @@ export interface CompanyContextFirestoreLike {
   countProjectsByField(field: "state" | "status" | "workflowName"): Promise<Record<string, number>>;
   sumProjectValue(filter: { status?: string }): Promise<number>;
   countWorkOrdersByStatus(): Promise<Record<string, number>>;
+  listProjectAssignees(): Promise<
+    Array<{ owner_email: string | null; sales_rep_email: string | null }>
+  >;
 }
 
 export interface CompanyContextDeps {
@@ -103,6 +106,17 @@ export async function createDefaultCompanyContextClient(): Promise<CompanyContex
         out[status] = (out[status] ?? 0) + 1;
       }
       return out;
+    },
+    async listProjectAssignees() {
+      const snap = await fs.collection("coperniq_projects").select("owner", "salesRep").get();
+      return snap.docs.map((doc) => {
+        const owner = doc.get("owner") as { email?: string } | undefined;
+        const salesRep = doc.get("salesRep") as { email?: string } | undefined;
+        return {
+          owner_email: owner?.email ?? null,
+          sales_rep_email: salesRep?.email ?? null,
+        };
+      });
     },
   };
 }
