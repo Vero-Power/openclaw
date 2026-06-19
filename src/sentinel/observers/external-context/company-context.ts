@@ -62,3 +62,47 @@ export async function buildCompanyContext(deps: CompanyContextDeps): Promise<str
     `Work orders: ${woCompleted} completed lifetime, ${woAssigned} currently assigned, ${woWaiting} waiting, ${woReview} in review.`,
   ].join("\n");
 }
+
+const COMPANY_CONTEXT_PROJECT_ID = "openclaw-mail-bridge";
+
+export async function createDefaultCompanyContextClient(): Promise<CompanyContextFirestoreLike> {
+  const { Firestore } = await import("@google-cloud/firestore");
+  const fs = new Firestore({ projectId: COMPANY_CONTEXT_PROJECT_ID });
+
+  return {
+    async countProjectsByField(field) {
+      const snap = await fs.collection("coperniq_projects").select(field).get();
+      const out: Record<string, number> = {};
+      for (const doc of snap.docs) {
+        const value = doc.get(field) as string | null | undefined;
+        const key = value ?? "(unknown)";
+        out[key] = (out[key] ?? 0) + 1;
+      }
+      return out;
+    },
+    async sumProjectValue(filter) {
+      let q = fs.collection("coperniq_projects").select("value", "status");
+      if (filter.status) {
+        q = q.where("status", "==", filter.status);
+      }
+      const snap = await q.get();
+      let total = 0;
+      for (const doc of snap.docs) {
+        const v = doc.get("value");
+        if (typeof v === "number") {
+          total += v;
+        }
+      }
+      return total;
+    },
+    async countWorkOrdersByStatus() {
+      const snap = await fs.collection("coperniq_work_orders").select("status").get();
+      const out: Record<string, number> = {};
+      for (const doc of snap.docs) {
+        const status = (doc.get("status") as string | null | undefined) ?? "(unknown)";
+        out[status] = (out[status] ?? 0) + 1;
+      }
+      return out;
+    },
+  };
+}
