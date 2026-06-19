@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { completeSimple, getEnvApiKey, getModel, type TextContent } from "@mariozechner/pi-ai";
 import { openSentinelDb } from "../../sentinel/db.js";
 import type { SpawnTaskInput } from "../../sentinel/followup-processor.js";
+import type { Recommendation } from "../../sentinel/oracle/store.js";
 import type { SlackClientLike } from "../../triage/actions/index.js";
 import { SLACK_USER_ALIASES } from "../../triage/actions/slack/aliases.js";
 import {
@@ -100,6 +101,16 @@ function getPlanner(): Planner {
     lazyPlanner = new Planner(llmClient, getRegistry(), { userAliases: SLACK_USER_ALIASES });
   }
   return lazyPlanner;
+}
+
+// F3 Oracle — set once by the provider after createSentinel resolves. The chat
+// handler short-circuits on action-recommendation intent when this is wired.
+type OracleSurface = {
+  recommendForUser(slackUserId: string): Promise<Recommendation[]>;
+};
+let oracleSurface: OracleSurface | null = null;
+export function setTriageOracle(o: OracleSurface): void {
+  oracleSurface = o;
 }
 
 function getContextBuilder(ctx: SlackMonitorContext): ConversationContextBuilder {
@@ -345,6 +356,7 @@ async function routeToChat(
           text: params.text,
         });
       },
+      ...(oracleSurface ? { oracle: oracleSurface } : {}),
       ...(followupsEnabled()
         ? {
             fileFollowup: (f: {

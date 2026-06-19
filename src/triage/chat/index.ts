@@ -1,5 +1,10 @@
 import { readFileSync } from "node:fs";
+import type { Recommendation } from "../../sentinel/oracle/store.js";
 import type { LlmClient } from "../llm-client.js";
+import {
+  detectActionRecommendationIntent,
+  formatRecommendationsReply,
+} from "./intents/action-recommendation.js";
 import { Reasoner } from "./reasoner.js";
 import { Responder } from "./responder.js";
 
@@ -26,6 +31,12 @@ export interface ChatHandlerDeps {
     payload: Record<string, unknown>;
   }) => Promise<string | null>;
   followupAliases?: string[];
+  // F3 Oracle: when present and the message matches the action-recommendation
+  // intent, the handler short-circuits — bypasses reasoner/responder and
+  // replies directly from oracle recommendations for the requesting user.
+  oracle?: {
+    recommendForUser(slackUserId: string): Promise<Recommendation[]>;
+  };
 }
 
 export async function handleChatMessage(
@@ -39,6 +50,24 @@ export async function handleChatMessage(
   },
   deps: ChatHandlerDeps,
 ): Promise<void> {
+  // F3 Oracle — pattern-match for action-recommendation intent. If matched and
+  // an oracle is wired, short-circuit before the reasoner/responder path.
+  if (deps.oracle && input.requesterUserId && detectActionRecommendationIntent(input.userMessage)) {
+    try {
+      const recs = await deps.oracle.recommendForUser(input.requesterUserId);
+      await deps.slackPost({
+        channel: input.channel,
+        thread_ts: input.isDm ? undefined : input.threadTs,
+        text: formatRecommendationsReply(recs),
+      });
+      return;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[chat] oracle recommendForUser failed:", (err as Error).message);
+      // fall through to the normal reasoner/responder path
+    }
+  }
+
   const reasoner = new Reasoner(deps.llm);
   const responder = new Responder(deps.llm);
 
