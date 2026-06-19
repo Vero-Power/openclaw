@@ -1,6 +1,11 @@
 import type { Database as DatabaseType } from "better-sqlite3";
 import type { Observer } from "../observer.js";
 import type { Observation } from "../types.js";
+import {
+  buildCompanyContext,
+  createDefaultCompanyContextClient,
+} from "./external-context/company-context.js";
+import { buildRecentResearchContext } from "./external-context/recent-research.js";
 
 export interface ExternalFinding {
   summary: string;
@@ -33,10 +38,12 @@ export interface Researcher {
 }
 
 export interface ExternalContextObserverDeps {
-  db?: DatabaseType;
+  db: DatabaseType;
   getResearcher?: () => Promise<Researcher>;
   researcherFactory?: () => Promise<Researcher> | Researcher;
   timeoutMs?: number;
+  companyContextFn?: () => Promise<string>;
+  recentResearchFn?: () => string;
 }
 
 const DEFAULT_BUDGET: ResearchBudget = {
@@ -46,6 +53,8 @@ const DEFAULT_BUDGET: ResearchBudget = {
 };
 
 const DEFAULT_TIMEOUT_MS = 90_000;
+
+const RECENT_RESEARCH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 const GEMINI_MODEL = "gemini-2.5-flash";
 
@@ -154,16 +163,21 @@ async function defaultResearcherFactory(): Promise<Researcher> {
   };
 }
 
-const SYSTEM_PROMPT = `You are a solar industry analyst monitoring real-time developments that affect Vero — a US residential solar installer operating in Colorado, Texas, and Arizona.
+function buildSystemPrompt(companyContext: string, recentResearch: string): string {
+  return `You are a solar industry analyst working for Vero.
 
-What matters to Vero:
-- Federal/state solar policy: ITC, NEM, state incentives, permitting changes
-- Supply chain: panel/inverter/battery vendor news, tariffs, lead-time shifts
-- Weather/grid: extreme-weather forecasts, grid outages, peak-demand events
-- Competition: large-installer news, M&A, pricing moves
-- Customer signals: financing, interest rates, electricity price trends
+${companyContext}
 
-Use the google_search tool to find developments from the last 24-72 hours. When you find something material, dive deeper (search again with a more specific query). Stop early when you've covered the key signals.
+${recentResearch}
+
+Use the google_search tool to find developments affecting Vero NOW. Prioritize signal relevant to the company's actual operating geography from the snapshot above. Don't re-search topics in the recent-research list unless there is a material update. Federal/national signal is fine when broadly relevant.
+
+What categories matter:
+- Federal/state solar policy: ITC, NEM, state incentives, permitting
+- Supply chain: panel/inverter/battery vendor news, tariffs, lead times
+- Weather/grid: extreme-weather forecasts, ERCOT events, grid outages
+- Competition: large-installer news, M&A, pricing
+- Customer signals: financing rates, electricity prices
 
 Budget: max 6 tool-use turns, max 30k tokens total, max 3 dives per topic. Track turns silently; you'll be cut off at the cap.
 
@@ -181,6 +195,7 @@ When done, return a JSON object only (no markdown fences):
 }
 
 Emit 3-5 findings if there is material signal; emit an empty array if nothing meaningful was found.`;
+}
 
 export function createExternalContextObserver(deps: ExternalContextObserverDeps): Observer {
   let cachedResearcher: Researcher | null = null;
@@ -203,6 +218,23 @@ export function createExternalContextObserver(deps: ExternalContextObserverDeps)
       const researcher = await resolveResearcher();
       const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
+      const companyContextFn =
+        deps.companyContextFn ??
+        (async () => {
+          const client = await createDefaultCompanyContextClient();
+          return buildCompanyContext({ client });
+        });
+      const recentResearchFn =
+        deps.recentResearchFn ??
+        (() => buildRecentResearchContext(deps.db, RECENT_RESEARCH_WINDOW_MS));
+
+      const [companyContext, recentResearch] = await Promise.all([
+        companyContextFn(),
+        Promise.resolve(recentResearchFn()),
+      ]);
+
+      const systemPrompt = buildSystemPrompt(companyContext, recentResearch);
+
       let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
       const timeoutPromise = new Promise<never>((_resolve, reject) => {
         timeoutHandle = setTimeout(
@@ -214,7 +246,7 @@ export function createExternalContextObserver(deps: ExternalContextObserverDeps)
       let result: ResearchResult;
       try {
         result = await Promise.race([
-          researcher.research({ systemPrompt: SYSTEM_PROMPT, budget: DEFAULT_BUDGET }),
+          researcher.research({ systemPrompt, budget: DEFAULT_BUDGET }),
           timeoutPromise,
         ]);
       } finally {
