@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Database as DatabaseType } from "better-sqlite3";
 import type { LlmClient } from "../triage/llm-client.js";
+import type { EmbeddedTable, EmbeddingService } from "./embeddings/service.js";
 import { buildCompanyContext } from "./observers/external-context/company-context.js";
 import type { CompanyContextFirestoreLike } from "./observers/external-context/company-context.js";
 import { writePerPersonFile } from "./oracle/file-writer.js";
@@ -17,6 +18,7 @@ export interface OracleDeps {
   firestoreClient: CompanyContextFirestoreLike;
   userAliases: Record<string, string>;
   dmUser?: (slackUserId: string, text: string) => Promise<void>;
+  embeddings: EmbeddingService;
 }
 
 export interface Oracle {
@@ -28,6 +30,9 @@ export interface Oracle {
     dmsSent: Array<{ assignee_email: string; rec_ids: string[] }>;
   }>;
 }
+
+const ORACLE_DEDUP_THRESHOLD = 0.85;
+const ORACLE_TABLE: EmbeddedTable = "oracle_recommendations";
 
 const MAX_DMS_PER_ASSIGNEE_PER_CYCLE = 5;
 
@@ -250,11 +255,47 @@ export function createOracle(deps: OracleDeps): Oracle {
 
     async runCycle() {
       const recs = await callLlm();
-      store.upsertAll(recs);
+
+      // Partition recs into (merge-into, fresh-insert) using semantic
+      // similarity against existing oracle_recommendations within the
+      // dedup window.
+      const merged: Array<{ existingId: string; rec: Recommendation }> = [];
+      const fresh: Recommendation[] = [];
+      for (const rec of recs) {
+        const text = `${rec.title}\n${rec.rationale}`;
+        const hits = await deps.embeddings.findSimilar({
+          table: ORACLE_TABLE,
+          text,
+          k: 1,
+        });
+        const top = hits[0];
+        if (top && top.similarity >= ORACLE_DEDUP_THRESHOLD) {
+          merged.push({ existingId: String(top.id), rec });
+        } else {
+          fresh.push(rec);
+        }
+      }
+
+      for (const m of merged) {
+        store.mergeInto(m.existingId, m.rec);
+      }
+      if (fresh.length > 0) {
+        store.upsertAll(fresh);
+      }
+      // Embed any fresh rows so subsequent cycles can dedup against them.
+      for (const rec of fresh) {
+        const text = `${rec.title}\n${rec.rationale}`;
+        await deps.embeddings.embedAndStore(ORACLE_TABLE, rec.id, text);
+      }
 
       const filesWritten: string[] = [];
-      const assigneeEmails = Array.from(new Set(recs.map((r) => r.assignee_email)));
-      for (const email of assigneeEmails) {
+      const allAssigneeEmails = Array.from(
+        new Set([
+          ...merged.map((m) => m.rec.assignee_email),
+          ...fresh.map((r) => r.assignee_email),
+        ]),
+      );
+      for (const email of allAssigneeEmails) {
         const list = store.queryAllForAssignee(email);
         const path = writePerPersonFile(deps.libPath, email, list);
         filesWritten.push(path);
@@ -262,8 +303,11 @@ export function createOracle(deps: OracleDeps): Oracle {
 
       const dmsSent: Array<{ assignee_email: string; rec_ids: string[] }> = [];
       if (deps.dmUser) {
-        for (const email of assigneeEmails) {
-          const slackId = recs.find((r) => r.assignee_email === email)?.assignee_slack_id ?? null;
+        for (const email of allAssigneeEmails) {
+          const slackId =
+            fresh.find((r) => r.assignee_email === email)?.assignee_slack_id ??
+            merged.find((m) => m.rec.assignee_email === email)?.rec.assignee_slack_id ??
+            null;
           if (!slackId) {
             continue;
           }
@@ -287,7 +331,11 @@ export function createOracle(deps: OracleDeps): Oracle {
         }
       }
 
-      return { recommendations: recs, filesWritten, dmsSent };
+      return {
+        recommendations: [...fresh, ...merged.map((m) => m.rec)],
+        filesWritten,
+        dmsSent,
+      };
     },
   };
 }

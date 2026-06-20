@@ -6,6 +6,7 @@ import type { LlmClient } from "../triage/llm-client.js";
 import { ConversationStore } from "./conversation-store.js";
 import { Curator } from "./curator.js";
 import { openSentinelDb } from "./db.js";
+import { createEmbeddingService } from "./embeddings/service.js";
 import { FollowupProcessor, type SpawnTaskInput } from "./followup-processor.js";
 import { FollowupStore } from "./followup-store.js";
 import { Inquirer } from "./inquirer.js";
@@ -71,6 +72,13 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
   ensureLibrarySkeleton(libPath);
   const db = openSentinelDb(sentinelDbPath);
 
+  // Minimal no-op adapter — Task 8 will replace this with the real Gemini
+  // adapter once it wires the API key through SentinelDeps.
+  const noOpAdapter = {
+    embed: async (_text: string): Promise<Float32Array> => new Float32Array(768),
+  };
+  const embeddingService = createEmbeddingService({ db, adapter: noOpAdapter });
+
   const registry = new ObserverRegistry();
   registry.register(createSelfObserver({ triageDbPath: deps.triageDbPath }));
   registry.register(
@@ -135,6 +143,7 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
       firestoreClient,
       userAliases: SLACK_USER_ALIASES,
       dmUser: deps.dmUser,
+      embeddings: embeddingService,
     });
     return oracleInstance;
   }
