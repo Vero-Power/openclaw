@@ -11,11 +11,15 @@ interface MinimalGenAIClient {
     embedContent(req: {
       model: string;
       contents: unknown;
+      config?: { outputDimensionality?: number };
     }): Promise<{ embeddings?: Array<{ values?: number[] }> }>;
   };
 }
 
-const EMBEDDING_MODEL = "text-embedding-004";
+// text-embedding-004 was retired from v1beta in 2026 — gemini-embedding-001
+// is the GA successor. Default output is 3072-dim; we pin outputDimensionality
+// to EMBEDDING_DIM (768) so the existing BLOB schema + cosine index stays valid.
+const EMBEDDING_MODEL = "gemini-embedding-001";
 
 export function createGeminiAdapterFromClient(client: MinimalGenAIClient): GeminiEmbeddingAdapter {
   return {
@@ -23,6 +27,7 @@ export function createGeminiAdapterFromClient(client: MinimalGenAIClient): Gemin
       const resp = await client.models.embedContent({
         model: EMBEDDING_MODEL,
         contents: text,
+        config: { outputDimensionality: EMBEDDING_DIM },
       });
       const values = resp.embeddings?.[0]?.values;
       if (!Array.isArray(values)) {

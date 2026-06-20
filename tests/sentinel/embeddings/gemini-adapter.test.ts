@@ -3,10 +3,18 @@ import { createGeminiAdapterFromClient } from "../../../src/sentinel/embeddings/
 
 describe("gemini-adapter", () => {
   it("delegates to client.models.embedContent and returns the 768-dim vector", async () => {
-    const captured: Array<{ model: string; contents: unknown }> = [];
+    const captured: Array<{
+      model: string;
+      contents: unknown;
+      config?: { outputDimensionality?: number };
+    }> = [];
     const fakeClient = {
       models: {
-        async embedContent(req: { model: string; contents: unknown }) {
+        async embedContent(req: {
+          model: string;
+          contents: unknown;
+          config?: { outputDimensionality?: number };
+        }) {
           captured.push(req);
           const values = Array.from({ length: 768 }).map((_, i) => i / 768);
           return { embeddings: [{ values }] };
@@ -20,7 +28,8 @@ describe("gemini-adapter", () => {
     expect(v[0]).toBeCloseTo(0, 6);
     expect(v[767]).toBeCloseTo(767 / 768, 6);
     expect(captured).toHaveLength(1);
-    expect(captured[0].model).toBe("text-embedding-004");
+    expect(captured[0].model).toBe("gemini-embedding-001");
+    expect(captured[0].config?.outputDimensionality).toBe(768);
   });
 
   it("throws when the response is missing values", async () => {
