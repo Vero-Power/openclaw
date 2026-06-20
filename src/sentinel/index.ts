@@ -6,6 +6,8 @@ import type { LlmClient } from "../triage/llm-client.js";
 import { ConversationStore } from "./conversation-store.js";
 import { Curator } from "./curator.js";
 import { openSentinelDb } from "./db.js";
+import { createDefaultGeminiAdapter } from "./embeddings/gemini-adapter.js";
+import type { GeminiEmbeddingAdapter } from "./embeddings/gemini-adapter.js";
 import { createEmbeddingService } from "./embeddings/service.js";
 import { FollowupProcessor, type SpawnTaskInput } from "./followup-processor.js";
 import { FollowupStore } from "./followup-store.js";
@@ -72,12 +74,19 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
   ensureLibrarySkeleton(libPath);
   const db = openSentinelDb(sentinelDbPath);
 
-  // Minimal no-op adapter — Task 8 will replace this with the real Gemini
-  // adapter once it wires the API key through SentinelDeps.
-  const noOpAdapter = {
-    embed: async (_text: string): Promise<Float32Array> => new Float32Array(768),
+  // Lazy Gemini adapter — defers the GEMINI_API_KEY check + @google/genai
+  // import until the first real embed call. Keeps createSentinel side-effect
+  // free for tests and boot.
+  let cachedAdapter: GeminiEmbeddingAdapter | null = null;
+  const lazyAdapter: GeminiEmbeddingAdapter = {
+    async embed(text: string): Promise<Float32Array> {
+      if (!cachedAdapter) {
+        cachedAdapter = await createDefaultGeminiAdapter();
+      }
+      return cachedAdapter.embed(text);
+    },
   };
-  const embeddingService = createEmbeddingService({ db, adapter: noOpAdapter });
+  const embeddingService = createEmbeddingService({ db, adapter: lazyAdapter });
 
   const registry = new ObserverRegistry();
   registry.register(createSelfObserver({ triageDbPath: deps.triageDbPath }));
