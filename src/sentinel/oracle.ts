@@ -32,6 +32,7 @@ export interface Oracle {
 }
 
 const ORACLE_DEDUP_THRESHOLD = 0.85;
+const ORACLE_DEDUP_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 const ORACLE_TABLE: EmbeddedTable = "oracle_recommendations";
 
 const MAX_DMS_PER_ASSIGNEE_PER_CYCLE = 5;
@@ -267,6 +268,7 @@ export function createOracle(deps: OracleDeps): Oracle {
           table: ORACLE_TABLE,
           text,
           k: 1,
+          sinceMs: Date.now() - ORACLE_DEDUP_WINDOW_MS,
         });
         const top = hits[0];
         if (top && top.similarity >= ORACLE_DEDUP_THRESHOLD) {

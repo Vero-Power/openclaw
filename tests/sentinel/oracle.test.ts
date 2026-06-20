@@ -258,11 +258,12 @@ describe("Oracle semantic dedup", () => {
     const existingTitle = "Investigate cancellation rate";
     const existingRationale = "22% projects cancelled — root cause unknown.";
     const existingEmbed = unitVector(42);
+    const seedTs = Date.now() - 1000;
 
     db.prepare(
       `INSERT INTO oracle_recommendations
        (id, assignee_email, title, rationale, evidence, scope, urgency, confidence, data, first_seen_at, last_seen_at, embedding)
-       VALUES ('seed1', 'x@example.com', ?, ?, ?, 'tactical', 'high', 'high', ?, 1000, 1000, ?)`,
+       VALUES ('seed1', 'x@example.com', ?, ?, ?, 'tactical', 'high', 'high', ?, ?, ?, ?)`,
     ).run(
       existingTitle,
       existingRationale,
@@ -277,8 +278,10 @@ describe("Oracle semantic dedup", () => {
         scope: "tactical",
         urgency: "high",
         confidence: "high",
-        generated_at: 1000,
+        generated_at: seedTs,
       }),
+      seedTs,
+      seedTs,
       Buffer.from(existingEmbed.buffer),
     );
 
@@ -327,18 +330,19 @@ describe("Oracle semantic dedup", () => {
     }>;
     expect(rows.length).toBe(1); // merged, not inserted
     expect(rows[0].id).toBe("seed1");
-    expect(rows[0].first_seen_at).toBe(1000);
-    expect(rows[0].last_seen_at).toBeGreaterThan(1000);
+    expect(rows[0].first_seen_at).toBe(seedTs);
+    expect(rows[0].last_seen_at).toBeGreaterThan(seedTs);
     const evidence = JSON.parse(rows[0].evidence) as string[];
     expect(evidence).toContain("insight:1");
     expect(evidence).toContain("insight:9");
   });
 
   it("inserts a fresh recommendation when cosine sim is below threshold", async () => {
+    const seedTs = Date.now() - 1000;
     db.prepare(
       `INSERT INTO oracle_recommendations
        (id, assignee_email, title, rationale, evidence, scope, urgency, confidence, data, first_seen_at, last_seen_at, embedding)
-       VALUES ('seed1', 'x@example.com', 't1', 'r1', ?, 'ops', 'high', 'high', ?, 1000, 1000, ?)`,
+       VALUES ('seed1', 'x@example.com', 't1', 'r1', ?, 'ops', 'high', 'high', ?, ?, ?, ?)`,
     ).run(
       JSON.stringify(["insight:1"]),
       JSON.stringify({
@@ -351,8 +355,10 @@ describe("Oracle semantic dedup", () => {
         scope: "ops",
         urgency: "high",
         confidence: "high",
-        generated_at: 1000,
+        generated_at: seedTs,
       }),
+      seedTs,
+      seedTs,
       Buffer.from(unitVector(42).buffer),
     );
 
