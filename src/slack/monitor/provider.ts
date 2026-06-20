@@ -66,7 +66,10 @@ const sentinelLlmClient: LlmClient = {
       {
         apiKey,
         temperature: opts?.temperature ?? 0,
-        maxTokens: 4096,
+        // Gemini 2.5 Flash spends part of maxTokens on invisible thinking
+        // tokens. Oracle's structured JSON output (5-8 recs) was truncating
+        // at 4096; doubling the cap leaves comfortable headroom for both.
+        maxTokens: 8192,
       },
     );
     return res.content
