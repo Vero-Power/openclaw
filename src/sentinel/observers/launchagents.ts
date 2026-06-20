@@ -28,35 +28,30 @@ export function createLaunchAgentsObserver(deps: LaunchAgentsObserverDeps): Obse
         return [];
       }
       const lines = output.split("\n").filter((l) => l.includes(deps.filterPrefix));
-      let running = 0;
-      let dormant = 0;
-      const labels: string[] = [];
+      let total = 0;
+      const dormantLabels: string[] = [];
       for (const line of lines) {
         // launchctl list lines: PID  Status  Label  — tab-separated
         const cols = line.split(/\s+/).filter(Boolean);
         if (cols.length < 3) {
           continue;
         }
-        const pid = cols[0];
-        labels.push(cols[2]);
-        if (pid === "-") {
-          dormant++;
-        } else {
-          running++;
+        total++;
+        if (cols[0] === "-") {
+          dormantLabels.push(cols[2]);
         }
       }
-      const total = running + dormant;
-      if (total === 0) {
+      if (dormantLabels.length === 0) {
         return [];
       }
       return [
         {
           source: "launchagents",
-          topic: "openclaw-jobs",
+          topic: "openclaw-jobs-dormant",
           timestamp: Date.now(),
-          summary: `${total} openclaw LaunchAgent jobs (${running} running, ${dormant} dormant): ${labels.join(", ")}`,
-          metrics: { total, running, dormant },
-          data: { labels },
+          summary: `${dormantLabels.length} of ${total} openclaw LaunchAgent jobs are dormant: ${dormantLabels.join(", ")}`,
+          metrics: { total, dormant: dormantLabels.length },
+          data: { dormantLabels },
         },
       ];
     },
