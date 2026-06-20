@@ -106,4 +106,57 @@ describe("OracleStore", () => {
     const count = db.prepare("SELECT COUNT(*) AS c FROM oracle_dms_sent").get() as { c: number };
     expect(count.c).toBe(1);
   });
+
+  describe("mergeInto", () => {
+    it("merges new rec into existing row: last_seen_at advances, first_seen_at preserved, evidence unioned", () => {
+      const existing = rec({ id: "abc", evidence: ["obs:1", "obs:2"] });
+      store.upsertAll([existing]);
+
+      // Capture the first_seen_at from the original row
+      const originalRow = db
+        .prepare("SELECT first_seen_at, last_seen_at FROM oracle_recommendations WHERE id = 'abc'")
+        .get() as { first_seen_at: number; last_seen_at: number };
+      const originalFirstSeenAt = originalRow.first_seen_at;
+
+      // Wait a tiny bit so generated_at will be clearly later
+      const incoming = rec({
+        id: "different-but-merging-into-abc",
+        evidence: ["obs:2", "obs:3", "insight:7"],
+        generated_at: Date.now() + 100,
+      });
+      store.mergeInto("abc", incoming);
+
+      const row = db
+        .prepare(
+          "SELECT id, first_seen_at, last_seen_at, evidence, data FROM oracle_recommendations WHERE id = 'abc'",
+        )
+        .get() as {
+        id: string;
+        first_seen_at: number;
+        last_seen_at: number;
+        evidence: string;
+        data: string;
+      };
+      expect(row.first_seen_at).toBe(originalFirstSeenAt);
+      expect(row.last_seen_at).toBe(incoming.generated_at);
+      const evidenceUnion = JSON.parse(row.evidence) as string[];
+      expect(new Set(evidenceUnion)).toEqual(new Set(["obs:1", "obs:2", "obs:3", "insight:7"]));
+
+      // data column must also reflect the union (otherwise downstream readers
+      // see stale evidence via queryAllForAssignee).
+      const parsedData = JSON.parse(row.data) as Recommendation;
+      expect(new Set(parsedData.evidence)).toEqual(
+        new Set(["obs:1", "obs:2", "obs:3", "insight:7"]),
+      );
+    });
+
+    it("is a no-op if the target id does not exist", () => {
+      const incoming = rec({ id: "anything", generated_at: 9999 });
+      expect(() => store.mergeInto("does-not-exist", incoming)).not.toThrow();
+      const row = db
+        .prepare("SELECT id FROM oracle_recommendations WHERE id = 'does-not-exist'")
+        .get();
+      expect(row).toBeUndefined();
+    });
+  });
 });

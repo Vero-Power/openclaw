@@ -101,4 +101,41 @@ export class OracleStore {
     });
     insertMany(entries);
   }
+
+  mergeInto(existingId: string, incoming: Recommendation): void {
+    const row = this.db
+      .prepare("SELECT data, evidence FROM oracle_recommendations WHERE id = ?")
+      .get(existingId) as { data: string; evidence: string } | undefined;
+    if (!row) {
+      return;
+    }
+    let existingEvidence: string[];
+    try {
+      const parsed = JSON.parse(row.evidence) as unknown;
+      existingEvidence = Array.isArray(parsed) ? (parsed as string[]) : [];
+    } catch {
+      existingEvidence = [];
+    }
+    const union = Array.from(new Set([...existingEvidence, ...incoming.evidence]));
+
+    // The `data` column holds the full serialized Recommendation, which
+    // is what queryAllForAssignee + diffNewForAssignee read back. Keep
+    // it in sync with the canonical evidence union — otherwise downstream
+    // consumers see stale evidence on merged rows.
+    let mergedData: Recommendation;
+    try {
+      const parsedData = JSON.parse(row.data) as Recommendation;
+      mergedData = { ...parsedData, evidence: union };
+    } catch {
+      mergedData = { ...incoming, evidence: union };
+    }
+
+    this.db
+      .prepare(
+        `UPDATE oracle_recommendations
+         SET last_seen_at = ?, evidence = ?, data = ?
+         WHERE id = ?`,
+      )
+      .run(incoming.generated_at, JSON.stringify(union), JSON.stringify(mergedData), existingId);
+  }
 }
