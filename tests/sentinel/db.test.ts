@@ -127,6 +127,7 @@ describe("openSentinelDb — oracle tables migration", () => {
       "confidence",
       "data",
       "dismissed_at",
+      "embedding",
       "evidence",
       "first_seen_at",
       "id",

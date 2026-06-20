@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS insights (
   confidence      REAL,
   generated_at    INTEGER NOT NULL,
   superseded_by   INTEGER REFERENCES insights(id),
-  filed_to        TEXT
+  filed_to        TEXT,
+  embedding       BLOB
 );
 
 CREATE INDEX IF NOT EXISTS idx_insights_category
@@ -134,7 +135,8 @@ CREATE TABLE IF NOT EXISTS oracle_recommendations (
   data              TEXT NOT NULL,
   first_seen_at     INTEGER NOT NULL,
   last_seen_at      INTEGER NOT NULL,
-  dismissed_at      INTEGER
+  dismissed_at      INTEGER,
+  embedding         BLOB
 );
 
 CREATE INDEX IF NOT EXISTS oracle_recommendations_assignee
@@ -161,6 +163,21 @@ export function openSentinelDb(path: string): DatabaseType {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA_SQL);
+
+  // Idempotent ALTER TABLE migrations for installs that pre-date these
+  // columns. SQLite has no IF NOT EXISTS for ADD COLUMN; we swallow the
+  // "duplicate column name" error so re-running on a fresh schema is a no-op.
+  for (const table of ["observations", "insights", "oracle_recommendations"]) {
+    try {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN embedding BLOB`);
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (!/duplicate column name: embedding/.test(msg)) {
+        throw err;
+      }
+    }
+  }
+
   connections.set(path, db);
   return db;
 }
