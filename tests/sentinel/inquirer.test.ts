@@ -303,6 +303,68 @@ describe("Inquirer (Phase B live mode — OPENCLAW_INQUIRER_LIVE=1)", () => {
     db.close();
   });
 
+  it("skips a question when a similar-topic conversation closed in the last 48h", async () => {
+    vi.stubEnv("OPENCLAW_INQUIRER_LIVE", "1");
+
+    const db = openSentinelDb(dbPath);
+    db.prepare(
+      "INSERT INTO insights (category, summary, evidence, derived_from, confidence, generated_at) VALUES (?,?,?,?,?,?)",
+    ).run("friction", "gap", "evidence", "[]", 0.4, Date.now());
+
+    const conversationStore = new ConversationStore(db);
+
+    // Prior conversation: same person, similar topic, ALREADY dropped
+    // (i.e. cooldown applies to closed convos too, not just open ones).
+    const opened = conversationStore.open({
+      person_user_id: "U_KALEB",
+      channel: "U_KALEB",
+      topic: "Inactive Slack channels",
+      opening_message: "Are those silent channels still needed?",
+    });
+    conversationStore.close(opened.id, "dropped");
+
+    const dmCalls: Array<{ user: string; text: string }> = [];
+    const llm: LlmClient = {
+      complete: vi.fn(async () =>
+        JSON.stringify({
+          questions: [
+            {
+              target_user_id: "U_KALEB",
+              // Phrased differently but semantically the same — token-overlap
+              // ("silent", "slack", "channels") catches it.
+              topic: "Silent Slack channels archival",
+              question_text: "Can we archive those quiet channels?",
+              rationale: "low activity",
+            },
+          ],
+        }),
+      ),
+    };
+
+    const inq = new Inquirer({
+      llm,
+      db,
+      libPath,
+      userAliases: TEST_ALIASES,
+      dmUser: async (user, text) => {
+        dmCalls.push({ user, text });
+      },
+      conversationStore,
+    });
+
+    await inq.formulateQuestions();
+
+    // No new DM — cooldown swallowed it
+    expect(dmCalls).toHaveLength(0);
+    // No new conversation either
+    const rows = db
+      .prepare("SELECT COUNT(*) AS cnt FROM conversations WHERE person_user_id = 'U_KALEB'")
+      .get() as { cnt: number };
+    expect(rows.cnt).toBe(1);
+
+    db.close();
+  });
+
   it("still writes to queue file even in live mode (queue-first behavior)", async () => {
     vi.stubEnv("OPENCLAW_INQUIRER_LIVE", "1");
 
