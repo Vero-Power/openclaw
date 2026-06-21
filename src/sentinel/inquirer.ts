@@ -132,7 +132,22 @@ export class Inquirer {
       return { questionsFiled: 0 };
     }
 
-    const insightLines = lowConfInsights
+    // Resolve channel IDs to names (or "unnamed-channel-CXXX") in the insight
+    // text BEFORE feeding the LLM. Without this, the model sees raw IDs like
+    // C0AT0FZTN85 and either reproduces them cryptically or, worse, fabricates
+    // generic labels ("the Private Channel and Private Channel channels") in
+    // the question_text it generates.
+    const enrichedInsights = this.deps.channelResolver
+      ? await Promise.all(
+          lowConfInsights.map(async (i) => ({
+            ...i,
+            summary: await this.deps.channelResolver!.enrichTextForPrompt(i.summary),
+            evidence: await this.deps.channelResolver!.enrichTextForPrompt(i.evidence),
+          })),
+        )
+      : lowConfInsights;
+
+    const insightLines = enrichedInsights
       .map(
         (i) =>
           `[insight ${i.id}] (${i.category}, conf ${i.confidence.toFixed(2)}) ${i.summary} — ${i.evidence}`,

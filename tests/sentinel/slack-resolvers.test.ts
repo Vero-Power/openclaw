@@ -114,4 +114,37 @@ describe("ChannelNameResolver", () => {
       expect(result).toBe("See <#C0AT0FZTN85|team-alerts> and <#C0ASFTRALH5|deployments> for info");
     });
   });
+
+  describe("enrichTextForPrompt()", () => {
+    let resolver: ChannelNameResolver;
+
+    beforeEach(() => {
+      const made = makeClient(async ({ channel }) => {
+        if (channel === "C0AT0FZTN85") {
+          return { ok: true, channel: { id: channel, name: "team-alerts" } };
+        }
+        return { ok: false, error: "channel_not_found" };
+      });
+      resolver = new ChannelNameResolver(made.client);
+    });
+
+    it("replaces known channel IDs with #name", async () => {
+      const result = await resolver.enrichTextForPrompt("Check C0AT0FZTN85 for alerts");
+      expect(result).toBe("Check #team-alerts for alerts");
+    });
+
+    it("describes unknown channel IDs concretely instead of leaving raw IDs", async () => {
+      const result = await resolver.enrichTextForPrompt("See C0UNKNOWNID for details");
+      expect(result).toBe("See unnamed-channel-C0UNKNOWNID (bot has no access) for details");
+    });
+
+    it("mixes known + unknown in a single pass", async () => {
+      const result = await resolver.enrichTextForPrompt(
+        "Activity in C0AT0FZTN85 and C0PRIVATEAA dropped",
+      );
+      expect(result).toBe(
+        "Activity in #team-alerts and unnamed-channel-C0PRIVATEAA (bot has no access) dropped",
+      );
+    });
+  });
 });
