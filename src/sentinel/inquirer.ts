@@ -6,6 +6,70 @@ import type { LlmClient } from "../triage/llm-client.js";
 import type { ConversationStore } from "./conversation-store.js";
 import type { ChannelNameResolver } from "./slack-resolvers.js";
 
+const INQUIRER_COOLDOWN_MS = 48 * 60 * 60 * 1000;
+const STOPWORDS = new Set([
+  "the",
+  "a",
+  "an",
+  "of",
+  "to",
+  "and",
+  "or",
+  "in",
+  "on",
+  "at",
+  "for",
+  "with",
+  "is",
+  "are",
+  "was",
+  "were",
+  "be",
+  "been",
+  "by",
+  "as",
+  "from",
+  "this",
+  "that",
+  "these",
+  "those",
+  "it",
+  "its",
+  "do",
+  "does",
+  "did",
+]);
+
+function tokenize(topic: string): Set<string> {
+  return new Set(
+    topic
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length > 1 && !STOPWORDS.has(w)),
+  );
+}
+
+function topicsAreSimilar(a: string, b: string): boolean {
+  const ta = tokenize(a);
+  const tb = tokenize(b);
+  if (ta.size === 0 || tb.size === 0) {
+    return false;
+  }
+  let intersect = 0;
+  for (const t of ta) {
+    if (tb.has(t)) {
+      intersect++;
+    }
+  }
+  // Overlap coefficient: |A ∩ B| / min(|A|, |B|). More tolerant than Jaccard
+  // when one topic is a reworded subset of the other ("Inactive Slack
+  // channels" vs "Silent Slack channels archival" — share slack+channels,
+  // overlap = 2/3 = 0.67). Threshold 0.6 catches obvious dups, rejects
+  // generic two-word overlaps like "Slack workflow" / "Slack integration".
+  const smaller = Math.min(ta.size, tb.size);
+  return intersect / smaller >= 0.6;
+}
+
 const QuestionsOutputSchema = z.object({
   questions: z.array(
     z.object({
@@ -68,7 +132,22 @@ export class Inquirer {
       return { questionsFiled: 0 };
     }
 
-    const insightLines = lowConfInsights
+    // Resolve channel IDs to names (or "unnamed-channel-CXXX") in the insight
+    // text BEFORE feeding the LLM. Without this, the model sees raw IDs like
+    // C0AT0FZTN85 and either reproduces them cryptically or, worse, fabricates
+    // generic labels ("the Private Channel and Private Channel channels") in
+    // the question_text it generates.
+    const enrichedInsights = this.deps.channelResolver
+      ? await Promise.all(
+          lowConfInsights.map(async (i) => ({
+            ...i,
+            summary: await this.deps.channelResolver!.enrichTextForPrompt(i.summary),
+            evidence: await this.deps.channelResolver!.enrichTextForPrompt(i.evidence),
+          })),
+        )
+      : lowConfInsights;
+
+    const insightLines = enrichedInsights
       .map(
         (i) =>
           `[insight ${i.id}] (${i.category}, conf ${i.confidence.toFixed(2)}) ${i.summary} — ${i.evidence}`,
@@ -164,6 +243,17 @@ export class Inquirer {
         // Enforce: only one open conversation per person at a time
         const existing = this.deps.conversationStore!.findOpenForPerson(q.target_user_id);
         if (existing) {
+          continue;
+        }
+        // Topic cooldown: if we already asked this person a similar question
+        // in the last 48h (regardless of how that conversation ended), skip.
+        // Stops the every-2h re-DM spam when a user doesn't reply and the
+        // conversation auto-drops, only to be re-asked next cycle.
+        const recent = this.deps.conversationStore!.findRecentForPerson(
+          q.target_user_id,
+          INQUIRER_COOLDOWN_MS,
+        );
+        if (recent.some((r) => topicsAreSimilar(r.topic, q.topic))) {
           continue;
         }
         this.deps.conversationStore!.open({

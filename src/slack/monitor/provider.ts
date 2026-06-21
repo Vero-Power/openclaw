@@ -39,7 +39,7 @@ import { registerSlackMonitorEvents } from "./events.js";
 import { fileAndProcessFollowup, followupsEnabled } from "./followup-bridge.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
-import { spawnFollowupTask } from "./triage-bridge.js";
+import { setTriageOracle, spawnFollowupTask } from "./triage-bridge.js";
 import type { MonitorSlackOpts } from "./types.js";
 
 function isTextBlock(block: { type: string }): block is TextContent {
@@ -66,7 +66,10 @@ const sentinelLlmClient: LlmClient = {
       {
         apiKey,
         temperature: opts?.temperature ?? 0,
-        maxTokens: 4096,
+        // Gemini 2.5 Flash spends part of maxTokens on invisible thinking
+        // tokens. Oracle's structured JSON output (5-8 recs) was truncating
+        // at 4096; doubling the cap leaves comfortable headroom for both.
+        maxTokens: 8192,
       },
     );
     return res.content
@@ -454,6 +457,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       sentinelDbPath,
       spawnTask: (input) => spawnFollowupTask(input, ctx),
     });
+    // Wire the F3 Oracle surface into the triage bridge so the chat handler
+    // can short-circuit on action-recommendation intent ("what's on my plate").
+    setTriageOracle(sentinel.oracle);
     sentinel.scheduler.start();
     runtime.log?.("[sentinel] scheduler started (interval: 2h, flag: OPENCLAW_SENTINEL_ENABLED)");
 

@@ -6,6 +6,9 @@ import type { LlmClient } from "../triage/llm-client.js";
 import { ConversationStore } from "./conversation-store.js";
 import { Curator } from "./curator.js";
 import { openSentinelDb } from "./db.js";
+import { createDefaultGeminiAdapter } from "./embeddings/gemini-adapter.js";
+import type { GeminiEmbeddingAdapter } from "./embeddings/gemini-adapter.js";
+import { createEmbeddingService } from "./embeddings/service.js";
 import { FollowupProcessor, type SpawnTaskInput } from "./followup-processor.js";
 import { FollowupStore } from "./followup-store.js";
 import { Inquirer } from "./inquirer.js";
@@ -15,12 +18,14 @@ import { runObservers } from "./observer-runner.js";
 import { ObserverRegistry } from "./observer.js";
 import { createCoperniqObserver } from "./observers/coperniq.js";
 import { createExternalContextObserver } from "./observers/external-context.js";
+import { createDefaultCompanyContextClient } from "./observers/external-context/company-context.js";
 import { createGcpFunctionsObserver } from "./observers/gcp-functions.js";
 import { createIndustryContextObserver } from "./observers/industry-context.js";
 import { createLaunchAgentsObserver } from "./observers/launchagents.js";
 import { createSelfObserver } from "./observers/self.js";
 import { createSlackChannelsObserver } from "./observers/slack-channels.js";
 import { createWeatherObserver } from "./observers/weather.js";
+import { createOracle, type Oracle, type Recommendation } from "./oracle.js";
 import { Reporter } from "./reporter.js";
 import { SentinelScheduler } from "./scheduler.js";
 import { ChannelNameResolver } from "./slack-resolvers.js";
@@ -58,6 +63,9 @@ export interface Sentinel {
   conversationStore: ConversationStore;
   channelResolver: ChannelNameResolver;
   runCycleOnce(): Promise<void>;
+  oracle: {
+    recommendForUser(slackUserId: string): Promise<Recommendation[]>;
+  };
 }
 
 export function createSentinel(deps: SentinelDeps): Sentinel {
@@ -65,6 +73,20 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
   const sentinelDbPath = deps.sentinelDbPath ?? join(homedir(), ".openclaw/sentinel.db");
   ensureLibrarySkeleton(libPath);
   const db = openSentinelDb(sentinelDbPath);
+
+  // Lazy Gemini adapter — defers the GEMINI_API_KEY check + @google/genai
+  // import until the first real embed call. Keeps createSentinel side-effect
+  // free for tests and boot.
+  let cachedAdapter: GeminiEmbeddingAdapter | null = null;
+  const lazyAdapter: GeminiEmbeddingAdapter = {
+    async embed(text: string): Promise<Float32Array> {
+      if (!cachedAdapter) {
+        cachedAdapter = await createDefaultGeminiAdapter();
+      }
+      return cachedAdapter.embed(text);
+    },
+  };
+  const embeddingService = createEmbeddingService({ db, adapter: lazyAdapter });
 
   const registry = new ObserverRegistry();
   registry.register(createSelfObserver({ triageDbPath: deps.triageDbPath }));
@@ -113,6 +135,27 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
     conversationStore,
     channelResolver,
   });
+
+  // Oracle: F3 action-recommendation engine.
+  // Lazy-constructed because the default Firestore client factory is async
+  // and createSentinel is sync. On first cycle, the oracle is built and cached.
+  let oracleInstance: Oracle | null = null;
+  async function getOracle(): Promise<Oracle> {
+    if (oracleInstance) {
+      return oracleInstance;
+    }
+    const firestoreClient = await createDefaultCompanyContextClient();
+    oracleInstance = createOracle({
+      db,
+      llm: deps.llm,
+      libPath,
+      firestoreClient,
+      userAliases: SLACK_USER_ALIASES,
+      dmUser: deps.dmUser,
+      embeddings: embeddingService,
+    });
+    return oracleInstance;
+  }
 
   let lastDailyReportDate: string | null = null;
   let lastWeeklyReportWeek: number | null = null;
@@ -186,6 +229,17 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
     // 4. Inquirer (manual-review mode in Phase A — no DMs)
     await inquirer.formulateQuestions();
 
+    // 4.5 F3 Oracle — generate and persist per-person recommendations,
+    // DM on new high-confidence actions. Guarded so a failure here does NOT
+    // block the rest of the cycle (index regeneration, reports).
+    try {
+      const o = await getOracle();
+      await o.runCycle();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[sentinel] oracle cycle failed:", (err as Error).message);
+    }
+
     // 5. Regenerate INDEX.md
     regenerateIndex(libPath);
 
@@ -228,7 +282,19 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
     },
   });
 
-  return { scheduler, db, conversationStore, channelResolver, runCycleOnce };
+  return {
+    scheduler,
+    db,
+    conversationStore,
+    channelResolver,
+    runCycleOnce,
+    oracle: {
+      recommendForUser: async (slackUserId: string) => {
+        const o = await getOracle();
+        return o.recommendForUser(slackUserId);
+      },
+    },
+  };
 }
 
 export { SentinelScheduler } from "./scheduler.js";

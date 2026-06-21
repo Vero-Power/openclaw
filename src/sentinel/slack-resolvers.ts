@@ -38,6 +38,28 @@ export class ChannelNameResolver {
    *   "<#CXXX>"        when name is unknown (Slack will still render the link)
    */
   async enrichText(text: string): Promise<string> {
+    return this.rewriteIds(text, (id, name) => (name ? `<#${id}|${name}>` : `<#${id}>`));
+  }
+
+  /**
+   * LLM-prompt-friendly rewrite. Replaces channel IDs with concrete textual
+   * references so the model doesn't invent generic labels like "Private
+   * Channel" when it sees an unfamiliar ID. Use this on insight/observation
+   * text BEFORE feeding it into an LLM prompt — not on the final DM body
+   * (use enrichText for that, which produces Slack auto-link syntax).
+   *   known   → "#name"
+   *   unknown → "unnamed-channel-CXXX (bot has no access)"
+   */
+  async enrichTextForPrompt(text: string): Promise<string> {
+    return this.rewriteIds(text, (id, name) =>
+      name ? `#${name}` : `unnamed-channel-${id} (bot has no access)`,
+    );
+  }
+
+  private async rewriteIds(
+    text: string,
+    format: (id: string, name: string | null) => string,
+  ): Promise<string> {
     const idPattern = /(?:<#)?#?(C[A-Z0-9]{8,})\b>?/g;
     const seen = new Set<string>();
     const matches: string[] = [];
@@ -56,10 +78,9 @@ export class ChannelNameResolver {
     for (let i = 0; i < matches.length; i++) {
       const id = matches[i];
       const name = names[i];
-      const replacement = name ? `<#${id}|${name}>` : `<#${id}>`;
       // Replace all forms: <#CXXX>, #CXXX, plain CXXX.
       const re = new RegExp(`(?:<#)?#?${id}\\b>?`, "g");
-      out = out.replace(re, replacement);
+      out = out.replace(re, format(id, name));
     }
     return out;
   }
