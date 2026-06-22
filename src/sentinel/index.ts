@@ -180,7 +180,7 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
     }
 
     // 1. Observe
-    const runResult = await runObservers({ registry, db });
+    const runResult = await runObservers({ registry, db, embeddings });
 
     // 2. Synthesize over fresh observations
     const lookback = Date.now() - 2 * 60 * 60 * 1000;
@@ -215,7 +215,7 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
     );
     for (const ins of insights) {
       const filed = await curator.fileInsight(ins, libPath);
-      insertInsight.run(
+      const info = insertInsight.run(
         ins.category,
         ins.summary,
         ins.evidence,
@@ -224,6 +224,9 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
         ins.generated_at,
         filed.filedTo,
       );
+      // Embed the new insight inline so future findSimilar queries
+      // can see it without waiting for the next backfill run.
+      await embeddings.embedAndStore("insights", Number(info.lastInsertRowid), ins.summary);
     }
 
     // 4. Inquirer (manual-review mode in Phase A — no DMs)
@@ -243,10 +246,28 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
     // 5. Regenerate INDEX.md
     regenerateIndex(libPath);
 
-    // 6. Daily report once per day
+    // 6. Daily report + embedding sweep once per day
     const todayKey = new Date().toISOString().slice(0, 10);
     if (lastDailyReportDate !== todayKey) {
       await reporter.writeDailySummary();
+      // Safety net: catch any rows the inline embed path missed (e.g.,
+      // transient Gemini failures). Idempotent — only touches NULL rows.
+      try {
+        const sweep = await embeddings.sweepNullEmbeddings();
+        const sum = (counts: Record<string, number>): number =>
+          Object.values(counts).reduce((a, b) => a + b, 0);
+        const totalEmbedded = sum(sweep.embedded);
+        const totalFailed = sum(sweep.failed);
+        if (totalEmbedded > 0 || totalFailed > 0) {
+          // eslint-disable-next-line no-console
+          console.log(
+            `[sentinel] daily embedding sweep: ${totalEmbedded} embedded, ${totalFailed} failed ${JSON.stringify(sweep.embedded)}`,
+          );
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("[sentinel] daily embedding sweep failed:", (err as Error).message);
+      }
       lastDailyReportDate = todayKey;
     }
 

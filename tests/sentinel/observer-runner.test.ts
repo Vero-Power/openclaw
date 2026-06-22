@@ -82,6 +82,58 @@ describe("observer runner", () => {
     db.close();
   });
 
+  it("embeds each inserted observation when an EmbeddingService is provided", async () => {
+    const db = openSentinelDb(SENTINEL_DB);
+    const reg = new ObserverRegistry();
+    reg.register({
+      name: "embed-me",
+      observe: async () => [
+        { source: "embed-me", timestamp: Date.now(), summary: "alpha" },
+        { source: "embed-me", timestamp: Date.now(), summary: "beta" },
+      ],
+    });
+
+    const calls: Array<{ table: string; id: string | number; text: string }> = [];
+    const embeddings = {
+      embed: async () => new Float32Array(768),
+      findSimilar: async () => [],
+      embedAndStore: async (
+        table: "observations" | "insights" | "oracle_recommendations",
+        id: string | number,
+        text: string,
+      ) => {
+        calls.push({ table, id, text });
+      },
+    };
+
+    const result = await runObservers({ registry: reg, db, embeddings });
+    expect(result.observationsWritten).toBe(2);
+    expect(calls).toHaveLength(2);
+    expect(calls.every((c) => c.table === "observations")).toBe(true);
+    expect(calls.map((c) => c.text).toSorted()).toEqual(["alpha", "beta"]);
+    // ids should be the actual lastInsertRowid values
+    const ids = db.prepare("SELECT id FROM observations ORDER BY id").all() as Array<{
+      id: number;
+    }>;
+    expect(calls.map((c) => c.id).toSorted((a, b) => Number(a) - Number(b))).toEqual(
+      ids.map((r) => r.id),
+    );
+
+    db.close();
+  });
+
+  it("works without an EmbeddingService (existing callers stay compatible)", async () => {
+    const db = openSentinelDb(SENTINEL_DB);
+    const reg = new ObserverRegistry();
+    reg.register({
+      name: "plain",
+      observe: async () => [{ source: "plain", timestamp: Date.now(), summary: "no embeddings" }],
+    });
+    const result = await runObservers({ registry: reg, db });
+    expect(result.observationsWritten).toBe(1);
+    db.close();
+  });
+
   it("isolates failures: one observer throwing does not block others", async () => {
     const db = openSentinelDb(SENTINEL_DB);
     const reg = new ObserverRegistry();

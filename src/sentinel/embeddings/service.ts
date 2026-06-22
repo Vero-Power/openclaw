@@ -17,10 +17,24 @@ export interface SimilarRow {
   similarity: number;
 }
 
+export interface SweepResult {
+  embedded: Record<EmbeddedTable, number>;
+  failed: Record<EmbeddedTable, number>;
+}
+
 export interface EmbeddingService {
   embed(text: string): Promise<Float32Array>;
   findSimilar(opts: FindSimilarOpts): Promise<SimilarRow[]>;
   embedAndStore(table: EmbeddedTable, id: string | number, text: string): Promise<void>;
+  /**
+   * Sweep all three tables for rows where embedding IS NULL and embed them.
+   * Idempotent — re-running only touches still-NULL rows. Returns per-table
+   * counts so the caller can log how much catch-up happened.
+   *
+   * Intended to run once a day from the sentinel cycle as a safety net
+   * for any inline-embed call that failed (transient API error, etc.).
+   */
+  sweepNullEmbeddings(): Promise<SweepResult>;
 }
 
 export interface EmbeddingServiceDeps {
@@ -129,5 +143,60 @@ export function createEmbeddingService(deps: EmbeddingServiceDeps): EmbeddingSer
     }
   }
 
-  return { embed, findSimilar, embedAndStore };
+  async function sweepNullEmbeddings(): Promise<SweepResult> {
+    const embedded: Record<EmbeddedTable, number> = {
+      observations: 0,
+      insights: 0,
+      oracle_recommendations: 0,
+    };
+    const failed: Record<EmbeddedTable, number> = {
+      observations: 0,
+      insights: 0,
+      oracle_recommendations: 0,
+    };
+    for (const cfg of Object.values(TABLE_CONFIGS)) {
+      const textCols = TEXT_COLUMNS[cfg.table];
+      const rows = deps.db
+        .prepare(
+          `SELECT ${cfg.idColumn} AS id, ${textCols.join(", ")} FROM ${cfg.table}
+           WHERE embedding IS NULL`,
+        )
+        .all() as Array<Record<string, unknown>>;
+      for (const row of rows) {
+        const id = row.id as string | number;
+        const text = TEXT_BUILDERS[cfg.table](row);
+        if (!text.trim()) {
+          continue;
+        }
+        const sizeBefore = indexes[cfg.table].embeddings.size;
+        await embedAndStore(cfg.table, id, text);
+        if (indexes[cfg.table].embeddings.size > sizeBefore) {
+          embedded[cfg.table]++;
+        } else {
+          failed[cfg.table]++;
+        }
+      }
+    }
+    return { embedded, failed };
+  }
+
+  return { embed, findSimilar, embedAndStore, sweepNullEmbeddings };
 }
+
+// Text-composition rules per table, kept centralized so the sweep
+// matches the inline embed paths.
+const TEXT_COLUMNS: Record<EmbeddedTable, string[]> = {
+  observations: ["summary"],
+  insights: ["summary"],
+  oracle_recommendations: ["title", "rationale"],
+};
+
+function asText(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+
+const TEXT_BUILDERS: Record<EmbeddedTable, (row: Record<string, unknown>) => string> = {
+  observations: (r) => asText(r.summary),
+  insights: (r) => asText(r.summary),
+  oracle_recommendations: (r) => `${asText(r.title)}\n${asText(r.rationale)}`,
+};
