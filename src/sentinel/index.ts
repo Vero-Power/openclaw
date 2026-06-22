@@ -180,7 +180,7 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
     }
 
     // 1. Observe
-    const runResult = await runObservers({ registry, db });
+    const runResult = await runObservers({ registry, db, embeddings });
 
     // 2. Synthesize over fresh observations
     const lookback = Date.now() - 2 * 60 * 60 * 1000;
@@ -215,7 +215,7 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
     );
     for (const ins of insights) {
       const filed = await curator.fileInsight(ins, libPath);
-      insertInsight.run(
+      const info = insertInsight.run(
         ins.category,
         ins.summary,
         ins.evidence,
@@ -224,6 +224,9 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
         ins.generated_at,
         filed.filedTo,
       );
+      // Embed the new insight inline so future findSimilar queries
+      // can see it without waiting for the next backfill run.
+      await embeddings.embedAndStore("insights", Number(info.lastInsertRowid), ins.summary);
     }
 
     // 4. Inquirer (manual-review mode in Phase A — no DMs)
