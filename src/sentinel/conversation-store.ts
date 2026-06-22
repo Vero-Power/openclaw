@@ -44,6 +44,7 @@ export class ConversationStore {
   private readonly stmtInsert: Statement;
   private readonly stmtFindOpen: Statement;
   private readonly stmtGetById: Statement;
+  private readonly stmtFindRecentForPerson: Statement;
   private readonly stmtUpdateTurns: Statement;
   private readonly stmtClose: Statement;
   private readonly stmtExpireStale: Statement;
@@ -64,6 +65,14 @@ export class ConversationStore {
 
     this.stmtGetById = db.prepare(`
       SELECT * FROM conversations WHERE id = ?
+    `);
+
+    this.stmtFindRecentForPerson = db.prepare(`
+      SELECT * FROM conversations
+      WHERE person_user_id = ?
+        AND COALESCE(closed_at, opened_at) >= ?
+      ORDER BY COALESCE(closed_at, opened_at) DESC
+      LIMIT ?
     `);
 
     this.stmtUpdateTurns = db.prepare(`
@@ -110,6 +119,22 @@ export class ConversationStore {
       return null;
     }
     return rowToConversation(row);
+  }
+
+  /**
+   * Return up to `limit` conversations for this person (any state) whose most
+   * recent activity (close timestamp if closed, otherwise opening timestamp)
+   * is within the past `withinMs`. Ordered newest first. Used by the inquirer
+   * cooldown to skip re-asking about a topic the person was recently asked.
+   */
+  findRecentForPerson(
+    personUserId: string,
+    withinMs: number,
+    limit = 5,
+  ): Array<Conversation & { id: number }> {
+    const since = Date.now() - withinMs;
+    const rows = this.stmtFindRecentForPerson.all(personUserId, since, limit) as ConversationRow[];
+    return rows.map(rowToConversation);
   }
 
   appendTurn(id: number, turn: ConversationTurn): void {

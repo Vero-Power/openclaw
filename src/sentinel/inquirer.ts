@@ -4,9 +4,18 @@ import type { Database as DatabaseType } from "better-sqlite3";
 import { z } from "zod";
 import type { LlmClient } from "../triage/llm-client.js";
 import type { ConversationStore } from "./conversation-store.js";
+import { cosineSimilarity } from "./embeddings/cosine.js";
+import type { EmbeddingService } from "./embeddings/service.js";
 import type { ChannelNameResolver } from "./slack-resolvers.js";
 
 const INQUIRER_COOLDOWN_MS = 48 * 60 * 60 * 1000;
+// Cosine threshold for semantic topic-similarity. Lower than oracle's 0.85
+// because topics are short strings — embeddings of short text cluster
+// tighter, so semantically distinct topics still register fairly high.
+// Tuned to catch obvious reworded dups ("Inactive Slack channels" vs
+// "Workspace quiet channels audit") without false-positiving on adjacent
+// but distinct topics ("BOM workflow" vs "BOM clarification").
+const INQUIRER_SEMANTIC_THRESHOLD = 0.75;
 const STOPWORDS = new Set([
   "the",
   "a",
@@ -105,6 +114,11 @@ export interface InquirerDeps {
   conversationStore?: ConversationStore;
   // Optional resolver — enriches question_text before writing to queue / DM
   channelResolver?: ChannelNameResolver;
+  // Optional: when provided, the per-person topic cooldown uses cosine
+  // similarity on embedded topics (more robust to rewording than the
+  // token-overlap fallback). On embedding failure, falls through to
+  // token-overlap so the cooldown still functions.
+  embeddings?: EmbeddingService;
 }
 
 export interface InquirerResult {
@@ -113,6 +127,37 @@ export interface InquirerResult {
 
 export class Inquirer {
   constructor(private deps: InquirerDeps) {}
+
+  /**
+   * Decide if any recent conversation has a topic similar enough to `topic`
+   * to suppress a new question. Prefers semantic (cosine on Gemini
+   * embeddings) when an EmbeddingService is provided; falls back to
+   * token-overlap if no service is wired or the embedding call throws.
+   */
+  private async recentSimilar(
+    topic: string,
+    recent: ReadonlyArray<{ topic: string }>,
+  ): Promise<boolean> {
+    if (recent.length === 0) {
+      return false;
+    }
+    if (this.deps.embeddings) {
+      try {
+        const target = await this.deps.embeddings.embed(topic);
+        for (const r of recent) {
+          const v = await this.deps.embeddings.embed(r.topic);
+          if (cosineSimilarity(target, v) >= INQUIRER_SEMANTIC_THRESHOLD) {
+            return true;
+          }
+        }
+        return false;
+      } catch {
+        // Embedding pipeline broke — degrade to token-overlap so the
+        // cooldown still suppresses obvious duplicates.
+      }
+    }
+    return recent.some((r) => topicsAreSimilar(r.topic, topic));
+  }
 
   async formulateQuestions(): Promise<InquirerResult> {
     const lowConfInsights = this.deps.db
@@ -253,7 +298,7 @@ export class Inquirer {
           q.target_user_id,
           INQUIRER_COOLDOWN_MS,
         );
-        if (recent.some((r) => topicsAreSimilar(r.topic, q.topic))) {
+        if (await this.recentSimilar(q.topic, recent)) {
           continue;
         }
         this.deps.conversationStore!.open({

@@ -303,6 +303,154 @@ describe("Inquirer (Phase B live mode — OPENCLAW_INQUIRER_LIVE=1)", () => {
     db.close();
   });
 
+  it("uses semantic similarity to skip a reworded topic that token-overlap would miss", async () => {
+    vi.stubEnv("OPENCLAW_INQUIRER_LIVE", "1");
+
+    const db = openSentinelDb(dbPath);
+    db.prepare(
+      "INSERT INTO insights (category, summary, evidence, derived_from, confidence, generated_at) VALUES (?,?,?,?,?,?)",
+    ).run("friction", "gap", "evidence", "[]", 0.4, Date.now());
+
+    const conversationStore = new ConversationStore(db);
+    const priorTopic = "Inactive Slack channels archival";
+    const newTopic = "Quiet workspace channel cleanup";
+    // Token-overlap of these two: tokens {inactive, slack, channels, archival}
+    // vs {quiet, workspace, channel, cleanup}. Zero token intersection ⇒
+    // overlap-coefficient = 0 ⇒ token fallback would let the question through.
+    // We're testing that SEMANTIC similarity (cosine ≥ 0.75) catches it.
+    const opened = conversationStore.open({
+      person_user_id: "U_KALEB",
+      channel: "U_KALEB",
+      topic: priorTopic,
+      opening_message: "Are those silent channels still needed?",
+    });
+    conversationStore.close(opened.id, "dropped");
+
+    // Fake embeddings: any two distinct strings get vectors that are
+    // 0.9-similar (above threshold) — proves the semantic path was taken
+    // rather than the zero-overlap token fallback.
+    const baseVec = new Float32Array(768);
+    baseVec[0] = Math.cos(0.45);
+    baseVec[1] = Math.sin(0.45);
+    const closeVec = new Float32Array(768);
+    closeVec[0] = Math.cos(0.55);
+    closeVec[1] = Math.sin(0.55);
+    const embeddings = {
+      embed: vi.fn(async (text: string) => (text === newTopic ? baseVec : closeVec)),
+      findSimilar: async () => [],
+      embedAndStore: async () => undefined,
+      sweepNullEmbeddings: async () => ({
+        embedded: { observations: 0, insights: 0, oracle_recommendations: 0 },
+        failed: { observations: 0, insights: 0, oracle_recommendations: 0 },
+      }),
+    };
+
+    const dmCalls: Array<{ user: string; text: string }> = [];
+    const llm: LlmClient = {
+      complete: vi.fn(async () =>
+        JSON.stringify({
+          questions: [
+            {
+              target_user_id: "U_KALEB",
+              topic: newTopic,
+              question_text: "Can we archive those?",
+              rationale: "low activity",
+            },
+          ],
+        }),
+      ),
+    };
+
+    const inq = new Inquirer({
+      llm,
+      db,
+      libPath,
+      userAliases: TEST_ALIASES,
+      dmUser: async (user, text) => {
+        dmCalls.push({ user, text });
+      },
+      conversationStore,
+      embeddings,
+    });
+
+    await inq.formulateQuestions();
+
+    // Semantic path suppressed it
+    expect(dmCalls).toHaveLength(0);
+    // And the embedding service was actually consulted
+    expect(embeddings.embed).toHaveBeenCalled();
+
+    db.close();
+  });
+
+  it("falls back to token-overlap when the embedding call throws", async () => {
+    vi.stubEnv("OPENCLAW_INQUIRER_LIVE", "1");
+
+    const db = openSentinelDb(dbPath);
+    db.prepare(
+      "INSERT INTO insights (category, summary, evidence, derived_from, confidence, generated_at) VALUES (?,?,?,?,?,?)",
+    ).run("friction", "gap", "evidence", "[]", 0.4, Date.now());
+
+    const conversationStore = new ConversationStore(db);
+    // Prior topic with substantial token overlap to the new one
+    const opened = conversationStore.open({
+      person_user_id: "U_KALEB",
+      channel: "U_KALEB",
+      topic: "Inactive Slack channels",
+      opening_message: "anything?",
+    });
+    conversationStore.close(opened.id, "dropped");
+
+    const embeddings = {
+      embed: vi.fn(async () => {
+        throw new Error("gemini down");
+      }),
+      findSimilar: async () => [],
+      embedAndStore: async () => undefined,
+      sweepNullEmbeddings: async () => ({
+        embedded: { observations: 0, insights: 0, oracle_recommendations: 0 },
+        failed: { observations: 0, insights: 0, oracle_recommendations: 0 },
+      }),
+    };
+
+    const dmCalls: Array<{ user: string; text: string }> = [];
+    const llm: LlmClient = {
+      complete: vi.fn(async () =>
+        JSON.stringify({
+          questions: [
+            {
+              target_user_id: "U_KALEB",
+              // Same tokens as prior — token-overlap should match
+              topic: "Inactive Slack channels followup",
+              question_text: "Status?",
+              rationale: "test",
+            },
+          ],
+        }),
+      ),
+    };
+
+    const inq = new Inquirer({
+      llm,
+      db,
+      libPath,
+      userAliases: TEST_ALIASES,
+      dmUser: async (user, text) => {
+        dmCalls.push({ user, text });
+      },
+      conversationStore,
+      embeddings,
+    });
+
+    await inq.formulateQuestions();
+
+    // Embedding tried — and threw — but token-overlap suppressed the DM
+    expect(embeddings.embed).toHaveBeenCalled();
+    expect(dmCalls).toHaveLength(0);
+
+    db.close();
+  });
+
   it("skips a question when a similar-topic conversation closed in the last 48h", async () => {
     vi.stubEnv("OPENCLAW_INQUIRER_LIVE", "1");
 
