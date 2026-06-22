@@ -168,6 +168,65 @@ describe("EmbeddingService", () => {
     expect(row.embedding).toBeNull();
   });
 
+  it("sweepNullEmbeddings catches up NULL rows across all three tables", async () => {
+    db.prepare(
+      `INSERT INTO observations (source, topic, timestamp, summary, created_at)
+       VALUES ('test', 't', 1, 'obs-null-text', 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO insights (category, summary, evidence, generated_at)
+       VALUES ('cat', 'insight-null-text', '[]', 2)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO oracle_recommendations
+       (id, assignee_email, title, rationale, evidence, scope, urgency, confidence, data, first_seen_at, last_seen_at)
+       VALUES ('rec1', 'x@example.com', 'rec-title', 'rec-rationale', '[]', 'ops', 'high', 'high', '{}', 1, 3)`,
+    ).run();
+    // One already-embedded observation that must NOT be re-embedded
+    db.prepare(
+      `INSERT INTO observations (source, topic, timestamp, summary, embedding, created_at)
+       VALUES ('test', 't', 4, 'already-embedded', ?, 1)`,
+    ).run(encodeEmbedding(unitVector(0)));
+
+    const adapter = makeAdapter(
+      new Map([
+        ["obs-null-text", unitVector(1)],
+        ["insight-null-text", unitVector(2)],
+        ["rec-title\nrec-rationale", unitVector(3)],
+      ]),
+    );
+    const svc = createEmbeddingService({ db, adapter });
+    const result = await svc.sweepNullEmbeddings();
+
+    expect(result.embedded.observations).toBe(1);
+    expect(result.embedded.insights).toBe(1);
+    expect(result.embedded.oracle_recommendations).toBe(1);
+
+    const remainingNull = db
+      .prepare(
+        `SELECT COUNT(*) AS c FROM (
+           SELECT 1 FROM observations WHERE embedding IS NULL
+           UNION ALL SELECT 1 FROM insights WHERE embedding IS NULL
+           UNION ALL SELECT 1 FROM oracle_recommendations WHERE embedding IS NULL
+         )`,
+      )
+      .get() as { c: number };
+    expect(remainingNull.c).toBe(0);
+  });
+
+  it("sweepNullEmbeddings is a no-op when every row is already embedded", async () => {
+    db.prepare(
+      `INSERT INTO observations (source, topic, timestamp, summary, embedding, created_at)
+       VALUES ('t', 't', 1, 'already-here', ?, 1)`,
+    ).run(encodeEmbedding(unitVector(0)));
+
+    const adapter = makeAdapter(new Map());
+    const svc = createEmbeddingService({ db, adapter });
+    const result = await svc.sweepNullEmbeddings();
+    expect(result.embedded.observations).toBe(0);
+    expect(result.failed.observations).toBe(0);
+  });
+
   it("oracle_recommendations uses last_seen_at as the timestamp column", async () => {
     db.prepare(
       `INSERT INTO oracle_recommendations
