@@ -12,7 +12,6 @@ import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
-import { fetchSlackThreadHistory } from "../../history.js";
 import {
   applyAppendOnlyStreamUpdate,
   buildStatusFinalPreviewText,
@@ -21,6 +20,7 @@ import {
 import type { SlackStreamSession } from "../../streaming.js";
 import { appendSlackStream, startSlackStream, stopSlackStream } from "../../streaming.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
+import { resolveSlackThreadHistory } from "../media.js";
 import { createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } from "../replies.js";
 import type { PreparedSlackMessage } from "./types.js";
 
@@ -352,9 +352,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let messageTextForDispatch = prepared.ctxPayload.text;
   if (account.config.triage?.enabled) {
     try {
-      const history = await fetchSlackThreadHistory({
+      const history = await resolveSlackThreadHistory({
         client: ctx.app.client,
-        channel: message.channel,
+        channelId: message.channel,
         threadTs: message.thread_ts ?? message.ts,
         limit: 10,
       });
