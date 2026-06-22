@@ -1,7 +1,9 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { completeSimple, getEnvApiKey, getModel, type TextContent } from "@mariozechner/pi-ai";
+import type { Database as DatabaseType } from "better-sqlite3";
 import { openSentinelDb } from "../../sentinel/db.js";
+import type { EmbeddingService } from "../../sentinel/embeddings/service.js";
 import type { SpawnTaskInput } from "../../sentinel/followup-processor.js";
 import type { Recommendation } from "../../sentinel/oracle/store.js";
 import type { SlackClientLike } from "../../triage/actions/index.js";
@@ -111,6 +113,18 @@ type OracleSurface = {
 let oracleSurface: OracleSurface | null = null;
 export function setTriageOracle(o: OracleSurface): void {
   oracleSurface = o;
+}
+
+// Chat RAG — set once by the provider after createSentinel resolves. When
+// wired, the chat handler prepends retrieved insights + oracle recs to the
+// reasoner's contextBlock.
+type ChatRagDeps = {
+  embeddings: EmbeddingService;
+  db: DatabaseType;
+};
+let chatRagDeps: ChatRagDeps | null = null;
+export function setChatRagDeps(d: ChatRagDeps): void {
+  chatRagDeps = d;
 }
 
 function getContextBuilder(ctx: SlackMonitorContext): ConversationContextBuilder {
@@ -357,6 +371,7 @@ async function routeToChat(
         });
       },
       ...(oracleSurface ? { oracle: oracleSurface } : {}),
+      ...(chatRagDeps ? { embeddings: chatRagDeps.embeddings, sentinelDb: chatRagDeps.db } : {}),
       ...(followupsEnabled()
         ? {
             fileFollowup: (f: {
