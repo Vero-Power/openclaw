@@ -134,6 +134,7 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
     dmUser: deps.dmUser,
     conversationStore,
     channelResolver,
+    embeddings,
   });
 
   // Oracle: F3 action-recommendation engine.
