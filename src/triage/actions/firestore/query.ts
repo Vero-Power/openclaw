@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { CatalogAction } from "../types.js";
-import { createDefaultFirestoreClient, type FirestoreLike } from "./client.js";
+import {
+  createDefaultFirestoreClient,
+  type FirestoreLike,
+  type FirestoreQueryRef,
+} from "./client.js";
 import { formatQueryDocs, type Doc } from "./format.js";
 
 const WhereClauseSchema = z.object({
@@ -53,7 +57,7 @@ export const firestoreQueryAction: CatalogAction<Args, FirestoreQueryResult> = {
   estimated_duration_ms: 800,
   invoke: async (args, ctx) => {
     const client = await resolveClient(ctx as { firestoreClientOverride?: FirestoreLike });
-    let q = client.collection(args.collection);
+    let q: FirestoreQueryRef = client.collection(args.collection);
     if (args.where) {
       for (const w of args.where) {
         q = q.where(w.field, w.op, w.value);
