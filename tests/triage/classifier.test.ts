@@ -47,7 +47,7 @@ describe("Classifier", () => {
     const classifier = new Classifier({ complete });
     await classifier.classify("did you send it?", "JR: I've queued a message to Ridge.");
     expect(complete.mock.calls[0][0]).toContain("I've queued a message to Ridge.");
-    expect(complete.mock.calls[0][0]).toContain("already did");
+    expect(complete.mock.calls[0][0]).toContain("still TASKS");
   });
 
   it("omits the context block when context is absent", async () => {
