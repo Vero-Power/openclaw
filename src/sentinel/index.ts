@@ -9,6 +9,7 @@ import { openSentinelDb } from "./db.js";
 import { createDefaultGeminiAdapter } from "./embeddings/gemini-adapter.js";
 import type { GeminiEmbeddingAdapter } from "./embeddings/gemini-adapter.js";
 import { createEmbeddingService } from "./embeddings/service.js";
+import type { EmbeddingService } from "./embeddings/service.js";
 import { FollowupProcessor, type SpawnTaskInput } from "./followup-processor.js";
 import { FollowupStore } from "./followup-store.js";
 import { Inquirer } from "./inquirer.js";
@@ -66,6 +67,7 @@ export interface Sentinel {
   oracle: {
     recommendForUser(slackUserId: string): Promise<Recommendation[]>;
   };
+  embeddings: EmbeddingService;
 }
 
 export function createSentinel(deps: SentinelDeps): Sentinel {
@@ -86,7 +88,7 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
       return cachedAdapter.embed(text);
     },
   };
-  const embeddingService = createEmbeddingService({ db, adapter: lazyAdapter });
+  const embeddings = createEmbeddingService({ db, adapter: lazyAdapter });
 
   const registry = new ObserverRegistry();
   registry.register(createSelfObserver({ triageDbPath: deps.triageDbPath }));
@@ -153,7 +155,7 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
       firestoreClient,
       userAliases: SLACK_USER_ALIASES,
       dmUser: deps.dmUser,
-      embeddings: embeddingService,
+      embeddings,
     });
     return oracleInstance;
   }
@@ -316,6 +318,7 @@ export function createSentinel(deps: SentinelDeps): Sentinel {
         return o.recommendForUser(slackUserId);
       },
     },
+    embeddings,
   };
 }
 

@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { openSentinelDb } from "../../../src/sentinel/db.js";
+import { encodeEmbedding } from "../../../src/sentinel/embeddings/blob-codec.js";
+import type { GeminiEmbeddingAdapter } from "../../../src/sentinel/embeddings/gemini-adapter.js";
+import { createEmbeddingService } from "../../../src/sentinel/embeddings/service.js";
 import { handleChatMessage } from "../../../src/triage/chat/index.js";
 import type { ChatHandlerDeps } from "../../../src/triage/chat/index.js";
 import type { LlmClient } from "../../../src/triage/llm-client.js";
@@ -146,5 +150,88 @@ describe("handleChatMessage", () => {
     expect(calls[0]).toContain("FULL-BLOCK-MARKER"); // reasoner gets full
     expect(calls[1]).toContain("HISTORY-ONLY-MARKER"); // responder gets history
     expect(calls[1]).not.toContain("FULL-BLOCK-MARKER");
+  });
+});
+
+function unitVector(i: number): Float32Array {
+  const v = new Float32Array(768);
+  v[i] = 1;
+  return v;
+}
+
+describe("handleChatMessage — RAG context", () => {
+  it("prepends RAG block to contextBlock when embeddings + sentinelDb wired", async () => {
+    const db = openSentinelDb(`:memory:?id=${Math.random()}`);
+    db.prepare(
+      `INSERT INTO insights (category, summary, evidence, generated_at, confidence, embedding)
+       VALUES ('operations', 'cancellation rate at 22%', '[]', 1, 0.85, ?)`,
+    ).run(encodeEmbedding(unitVector(0)));
+
+    const adapter: GeminiEmbeddingAdapter = {
+      async embed() {
+        return unitVector(0);
+      },
+    };
+    const embeddings = createEmbeddingService({ db, adapter });
+
+    const capturedPrompts: string[] = [];
+    const llm: LlmClient = {
+      complete: vi.fn(async (prompt: string) => {
+        capturedPrompts.push(prompt);
+        // Reasoner response — empty findings, no followups
+        if (prompt.includes("Conversation context:")) {
+          return JSON.stringify({ findings: "none", confidence: 0.5, followups: [] });
+        }
+        // Responder response
+        return "got it";
+      }),
+    };
+
+    const slackPosts: Array<{ channel: string; text: string }> = [];
+    await handleChatMessage(
+      {
+        userMessage: "what's going on with cancellations?",
+        channel: "D12345",
+        isDm: true,
+      },
+      {
+        llm,
+        slackPost: async (p) => {
+          slackPosts.push({ channel: p.channel, text: p.text });
+        },
+        embeddings,
+        sentinelDb: db,
+      },
+    );
+
+    expect(slackPosts).toHaveLength(1);
+    // Reasoner prompt (first LLM call) should include the RAG block
+    const reasonerPrompt = capturedPrompts[0] ?? "";
+    expect(reasonerPrompt).toContain("Relevant knowledge from JR's memory:");
+    expect(reasonerPrompt).toContain("cancellation rate at 22%");
+  });
+
+  it("works without embeddings/sentinelDb — falls back to normal flow", async () => {
+    const llm: LlmClient = {
+      complete: vi.fn(async (prompt: string) => {
+        if (prompt.includes("Conversation context:")) {
+          return JSON.stringify({ findings: [], followups: [] });
+        }
+        return "no context reply";
+      }),
+    };
+
+    const slackPosts: Array<{ channel: string; text: string }> = [];
+    await handleChatMessage(
+      { userMessage: "hi", channel: "D12345", isDm: true },
+      {
+        llm,
+        slackPost: async (p) => {
+          slackPosts.push({ channel: p.channel, text: p.text });
+        },
+      },
+    );
+
+    expect(slackPosts).toHaveLength(1);
   });
 });

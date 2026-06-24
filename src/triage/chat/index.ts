@@ -1,10 +1,13 @@
 import { readFileSync } from "node:fs";
+import type { Database as DatabaseType } from "better-sqlite3";
+import type { EmbeddingService } from "../../sentinel/embeddings/service.js";
 import type { Recommendation } from "../../sentinel/oracle/store.js";
 import type { LlmClient } from "../llm-client.js";
 import {
   detectActionRecommendationIntent,
   formatRecommendationsReply,
 } from "./intents/action-recommendation.js";
+import { buildRagContext } from "./rag-context.js";
 import { Reasoner } from "./reasoner.js";
 import { Responder } from "./responder.js";
 
@@ -37,6 +40,11 @@ export interface ChatHandlerDeps {
   oracle?: {
     recommendForUser(slackUserId: string): Promise<Recommendation[]>;
   };
+  // RAG context: when BOTH present, the handler builds a "Relevant knowledge
+  // from JR's memory" block and prepends it to the reasoner's contextBlock.
+  // Either missing → behavior unchanged.
+  embeddings?: EmbeddingService;
+  sentinelDb?: DatabaseType;
 }
 
 export async function handleChatMessage(
@@ -71,9 +79,23 @@ export async function handleChatMessage(
   const reasoner = new Reasoner(deps.llm);
   const responder = new Responder(deps.llm);
 
+  // RAG augmentation: pull semantically similar insights + oracle recs and
+  // prepend to the reasoner's contextBlock. Augmentative-only — any failure
+  // returns empty string and we proceed with the original context.
+  let augmentedContext = input.convoContext?.full;
+  if (deps.embeddings && deps.sentinelDb) {
+    const ragBlock = await buildRagContext(input.userMessage, {
+      embeddings: deps.embeddings,
+      db: deps.sentinelDb,
+    });
+    if (ragBlock) {
+      augmentedContext = augmentedContext ? `${ragBlock}\n\n${augmentedContext}` : ragBlock;
+    }
+  }
+
   const reasoned = await reasoner.reason({
     userMessage: input.userMessage,
-    contextBlock: input.convoContext?.full,
+    contextBlock: augmentedContext,
     followups: deps.fileFollowup ? { knownAliases: deps.followupAliases ?? [] } : undefined,
   });
 

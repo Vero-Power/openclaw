@@ -39,7 +39,7 @@ import { registerSlackMonitorEvents } from "./events.js";
 import { fileAndProcessFollowup, followupsEnabled } from "./followup-bridge.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
-import { setTriageOracle, spawnFollowupTask } from "./triage-bridge.js";
+import { setChatRagDeps, setTriageOracle, spawnFollowupTask } from "./triage-bridge.js";
 import type { MonitorSlackOpts } from "./types.js";
 
 function isTextBlock(block: { type: string }): block is TextContent {
@@ -460,6 +460,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     // Wire the F3 Oracle surface into the triage bridge so the chat handler
     // can short-circuit on action-recommendation intent ("what's on my plate").
     setTriageOracle(sentinel.oracle);
+    setChatRagDeps({ embeddings: sentinel.embeddings, db: sentinel.db });
     sentinel.scheduler.start();
     runtime.log?.("[sentinel] scheduler started (interval: 2h, flag: OPENCLAW_SENTINEL_ENABLED)");
 
