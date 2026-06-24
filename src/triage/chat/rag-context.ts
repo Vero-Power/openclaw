@@ -59,6 +59,16 @@ export async function buildRagContext(message: string, deps: RagContextDeps): Pr
       return "";
     }
 
+    // Production visibility: success path is otherwise silent. Logging hit
+    // counts + top similarity makes it trivial to confirm RAG is grounding
+    // live replies (instead of guessing from reply content alone).
+    const topInsight = insightHits[0]?.similarity ?? 0;
+    const topOracle = oracleHits[0]?.similarity ?? 0;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[rag-context] insights=${insightHits.length}(top=${topInsight.toFixed(2)}) oracle=${oracleHits.length}(top=${topOracle.toFixed(2)})`,
+    );
+
     const lines: string[] = ["Relevant knowledge from JR's memory:"];
 
     if (insightHits.length > 0) {
