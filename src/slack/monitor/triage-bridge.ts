@@ -354,6 +354,26 @@ export async function handleThreadReplyForActiveTriage(
     } catch (err) {
       ctx.runtime.log(`[auditor] error during audit-replan: ${(err as Error).message}`);
     }
+
+    // Hand the populated research bundle to the responder so the user gets a
+    // grounded reply (not just the executor's per-step excerpt summary).
+    // The synthetic event carries the *original* question text — event.text
+    // here is "yes" / "go" / etc. (the approval signal), which would mislead
+    // the responder.
+    try {
+      const finalSession = getStore().get(active.request_id);
+      const bundle = getStore().getBundle(active.request_id);
+      if (finalSession?.state === "COMPLETE" && bundle.entries.length > 0) {
+        const convoContext = await buildConvoContext(event, ctx);
+        const groundedEvent: SlackMessageEvent = {
+          ...event,
+          text: active.requester_message ?? event.text ?? "",
+        };
+        await routeToChat(groundedEvent, ctx, convoContext, bundle);
+      }
+    } catch (err) {
+      ctx.runtime.log(`[triage] grounded responder reply failed: ${(err as Error).message}`);
+    }
   } else if (signal.kind === "cancel") {
     getStore().transition(active.request_id, "CANCELLED");
     await ctx.app.client.chat.postMessage({
