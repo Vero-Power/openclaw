@@ -39,7 +39,7 @@ async function resolveClient(ctx: {
 export const firestoreCountAction: CatalogAction<Args, FirestoreCountResult> = {
   name: "firestoreCount",
   description:
-    "Count docs in a Firestore collection, optionally with where filters. Cheap aggregation — use this instead of firestoreQuery when you only need the count.",
+    "Count docs in a Firestore collection. Args: { collection: string, where?: [{ field: string, op: '=='|'!='|'<'|'<='|'>'|'>='|'in'|'array-contains', value: any }] }. Each where entry MUST be an object with field/op/value keys, NOT a tuple/array. Cheap aggregation — prefer over firestoreQuery for count-only.",
   args_schema: ArgsSchema,
   idempotent: true,
   external_effect: false,

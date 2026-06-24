@@ -50,7 +50,7 @@ async function resolveClient(ctx: {
 export const firestoreQueryAction: CatalogAction<Args, FirestoreQueryResult> = {
   name: "firestoreQuery",
   description:
-    "Filter + order + limit a Firestore collection. Use after firestoreKeys so the field names are real. limit defaults to 10, max 50.",
+    "Filter + order + limit a Firestore collection. Args: { collection: string, where?: [{ field: string, op: '=='|'!='|'<'|'<='|'>'|'>='|'in'|'array-contains', value: any }], orderBy?: { field: string, direction?: 'asc'|'desc' }, limit?: number }. Each where entry MUST be an object with field/op/value keys, NOT a tuple/array. Use after firestoreKeys so the field names are real. limit defaults to 10, max 50.",
   args_schema: ArgsSchema,
   idempotent: true,
   external_effect: false,
