@@ -123,6 +123,77 @@ describe("buildRagContext", () => {
     expect(out).toBe("");
   });
 
+  it("renders observation hits below insights + oracle, with source/topic labels", async () => {
+    db.prepare(
+      `INSERT INTO insights (category, summary, evidence, generated_at, confidence, embedding)
+       VALUES ('ops', 'an insight', '[]', 1, 0.8, ?)`,
+    ).run(encodeEmbedding(unitVector(0)));
+    db.prepare(
+      `INSERT INTO oracle_recommendations
+       (id, assignee_email, title, rationale, evidence, scope, urgency, confidence, data, first_seen_at, last_seen_at, embedding)
+       VALUES ('r1', 'x@example.com', 'a rec', 'r', '[]', 'tactical', 'high', 'high', '{}', 1, 1, ?)`,
+    ).run(encodeEmbedding(unitVector(0)));
+    // Recent observation that should clear the higher OBS threshold (0.65)
+    db.prepare(
+      `INSERT INTO observations (source, topic, timestamp, summary, embedding, created_at)
+       VALUES ('slack-channels', 'channel:CABC', ?, 'recent observation text', ?, 1)`,
+    ).run(Date.now() - 1000, encodeEmbedding(unitVector(0)));
+
+    const adapter = makeAdapter(new Map([["q", unitVector(0)]]));
+    const embeddings = createEmbeddingService({ db, adapter });
+
+    const out = await buildRagContext("q", { embeddings, db });
+    const insightPos = out.indexOf("[insight");
+    const oraclePos = out.indexOf("[oracle rec");
+    const obsPos = out.indexOf("[observation");
+    expect(insightPos).toBeGreaterThan(-1);
+    expect(oraclePos).toBeGreaterThan(insightPos);
+    expect(obsPos).toBeGreaterThan(oraclePos);
+    expect(out).toContain("[observation | source=slack-channels/channel:CABC]");
+    expect(out).toContain("recent observation text");
+  });
+
+  it("observations cap at k=3 and only clear the higher 0.65 threshold", async () => {
+    // Cosine of e_0 against itself is 1.0; against (0.7, sqrt(1-0.49)) it's 0.7.
+    // To represent "below 0.65" without leaving threshold ambiguity, we use 0.6.
+    const above = unitVector(0);
+    const below = new Float32Array(768);
+    below[0] = 0.6;
+    below[1] = Math.sqrt(1 - 0.36);
+
+    for (let i = 0; i < 5; i++) {
+      db.prepare(
+        `INSERT INTO observations (source, topic, timestamp, summary, embedding, created_at)
+         VALUES ('test', 't', ?, ?, ?, 1)`,
+      ).run(Date.now() - i * 1000, `obs above ${i}`, encodeEmbedding(above));
+    }
+    db.prepare(
+      `INSERT INTO observations (source, topic, timestamp, summary, embedding, created_at)
+       VALUES ('test', 't', ?, 'obs below threshold', ?, 1)`,
+    ).run(Date.now() - 10_000, encodeEmbedding(below));
+
+    const adapter = makeAdapter(new Map([["q", unitVector(0)]]));
+    const embeddings = createEmbeddingService({ db, adapter });
+
+    const out = await buildRagContext("q", { embeddings, db });
+    const obsLines = out.split("\n").filter((l) => l.includes("[observation"));
+    expect(obsLines).toHaveLength(3);
+    expect(out).not.toContain("obs below threshold");
+  });
+
+  it("observations older than the 14d window are excluded even at high similarity", async () => {
+    db.prepare(
+      `INSERT INTO observations (source, topic, timestamp, summary, embedding, created_at)
+       VALUES ('test', 't', ?, 'ancient observation', ?, 1)`,
+    ).run(Date.now() - 30 * 24 * 60 * 60 * 1000, encodeEmbedding(unitVector(0)));
+
+    const adapter = makeAdapter(new Map([["q", unitVector(0)]]));
+    const embeddings = createEmbeddingService({ db, adapter });
+
+    const out = await buildRagContext("q", { embeddings, db });
+    expect(out).toBe("");
+  });
+
   it("oracle hits still render when insights findSimilar throws", async () => {
     db.prepare(
       `INSERT INTO oracle_recommendations
