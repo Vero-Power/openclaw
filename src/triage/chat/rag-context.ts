@@ -7,8 +7,17 @@ export interface RagContextDeps {
 }
 
 const RAG_THRESHOLD = 0.5;
+// Higher bar for observations — they're the noisiest source (channel
+// silence pings, weather forecasts, raw GCF execution counts). Without
+// this we'd dilute the prompt with low-signal hits that happen to share
+// a keyword with the user's message.
+const RAG_OBS_THRESHOLD = 0.65;
 const RAG_K_INSIGHTS = 3;
 const RAG_K_ORACLE = 2;
+const RAG_K_OBS = 3;
+// Observations get a recency window — older raw events go stale fast.
+// Insights + oracle don't get one because they're already curated.
+const RAG_OBS_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
 interface InsightRow {
   id: number;
@@ -24,15 +33,28 @@ interface OracleRow {
   urgency: string;
 }
 
+interface ObservationRow {
+  id: number;
+  source: string;
+  topic: string | null;
+  summary: string;
+}
+
 async function findSimilarSafe(
   embeddings: EmbeddingService,
-  table: "insights" | "oracle_recommendations",
+  table: "insights" | "oracle_recommendations" | "observations",
   message: string,
   k: number,
+  threshold: number,
+  sinceMs?: number,
 ): Promise<SimilarRow[]> {
   try {
-    const hits = await embeddings.findSimilar({ table, text: message, k });
-    return hits.filter((h) => h.similarity >= RAG_THRESHOLD);
+    const opts: Parameters<EmbeddingService["findSimilar"]>[0] = { table, text: message, k };
+    if (sinceMs !== undefined) {
+      opts.sinceMs = sinceMs;
+    }
+    const hits = await embeddings.findSimilar(opts);
+    return hits.filter((h) => h.similarity >= threshold);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn(`[rag-context] findSimilar(${table}) failed: ${(err as Error).message}`);
@@ -50,12 +72,27 @@ function formatConfidence(c: number | null): string {
 
 export async function buildRagContext(message: string, deps: RagContextDeps): Promise<string> {
   try {
-    const [insightHits, oracleHits] = await Promise.all([
-      findSimilarSafe(deps.embeddings, "insights", message, RAG_K_INSIGHTS),
-      findSimilarSafe(deps.embeddings, "oracle_recommendations", message, RAG_K_ORACLE),
+    const obsSinceMs = Date.now() - RAG_OBS_WINDOW_MS;
+    const [insightHits, oracleHits, obsHits] = await Promise.all([
+      findSimilarSafe(deps.embeddings, "insights", message, RAG_K_INSIGHTS, RAG_THRESHOLD),
+      findSimilarSafe(
+        deps.embeddings,
+        "oracle_recommendations",
+        message,
+        RAG_K_ORACLE,
+        RAG_THRESHOLD,
+      ),
+      findSimilarSafe(
+        deps.embeddings,
+        "observations",
+        message,
+        RAG_K_OBS,
+        RAG_OBS_THRESHOLD,
+        obsSinceMs,
+      ),
     ]);
 
-    if (insightHits.length === 0 && oracleHits.length === 0) {
+    if (insightHits.length === 0 && oracleHits.length === 0 && obsHits.length === 0) {
       return "";
     }
 
@@ -64,9 +101,10 @@ export async function buildRagContext(message: string, deps: RagContextDeps): Pr
     // live replies (instead of guessing from reply content alone).
     const topInsight = insightHits[0]?.similarity ?? 0;
     const topOracle = oracleHits[0]?.similarity ?? 0;
+    const topObs = obsHits[0]?.similarity ?? 0;
     // eslint-disable-next-line no-console
     console.log(
-      `[rag-context] insights=${insightHits.length}(top=${topInsight.toFixed(2)}) oracle=${oracleHits.length}(top=${topOracle.toFixed(2)})`,
+      `[rag-context] insights=${insightHits.length}(top=${topInsight.toFixed(2)}) oracle=${oracleHits.length}(top=${topOracle.toFixed(2)}) obs=${obsHits.length}(top=${topObs.toFixed(2)})`,
     );
 
     const lines: string[] = ["Relevant knowledge from JR's memory:"];
@@ -107,6 +145,25 @@ export async function buildRagContext(message: string, deps: RagContextDeps): Pr
           continue;
         }
         lines.push(`- [oracle rec | urgency=${row.urgency}] ${row.title}`);
+      }
+    }
+
+    if (obsHits.length > 0) {
+      const ids = obsHits.map((h) => h.id as number);
+      const rows = deps.db
+        .prepare(
+          `SELECT id, source, topic, summary
+           FROM observations WHERE id IN (${placeholders(ids.length)})`,
+        )
+        .all(...ids) as ObservationRow[];
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      for (const hit of obsHits) {
+        const row = byId.get(hit.id as number);
+        if (!row) {
+          continue;
+        }
+        const topicSuffix = row.topic ? `/${row.topic}` : "";
+        lines.push(`- [observation | source=${row.source}${topicSuffix}] ${row.summary}`);
       }
     }
 
