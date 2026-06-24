@@ -88,31 +88,45 @@ function makeSlackClient(): SlackClientLike {
 }
 
 describe("bootstrapActionCatalog", () => {
-  it("with no deps registers only coperniqFirestoreIngest", () => {
+  const BASE_ACTIONS = [
+    "coperniqFirestoreIngest",
+    "firestoreCollections",
+    "firestoreKeys",
+    "firestoreGet",
+    "firestoreQuery",
+    "firestoreCount",
+  ];
+
+  it("with no deps registers the base action set", () => {
     const reg = bootstrapActionCatalog();
     const names = reg.list().map((a) => a.name);
-    expect(names).toEqual(["coperniqFirestoreIngest"]);
+    expect(names).toEqual(expect.arrayContaining(BASE_ACTIONS));
+    expect(names).toHaveLength(BASE_ACTIONS.length);
   });
 
-  it("with empty deps object registers only coperniqFirestoreIngest", () => {
+  it("with empty deps object registers the base action set", () => {
     const reg = bootstrapActionCatalog({});
     const names = reg.list().map((a) => a.name);
-    expect(names).toEqual(["coperniqFirestoreIngest"]);
+    expect(names).toEqual(expect.arrayContaining(BASE_ACTIONS));
+    expect(names).toHaveLength(BASE_ACTIONS.length);
   });
 
   it("with slackClient but no botToken does not register Slack actions", () => {
     const reg = bootstrapActionCatalog({ slackClient: makeSlackClient() });
     const names = reg.list().map((a) => a.name);
-    expect(names).toEqual(["coperniqFirestoreIngest"]);
+    expect(names).toEqual(expect.arrayContaining(BASE_ACTIONS));
+    expect(names).toHaveLength(BASE_ACTIONS.length);
   });
 
-  it("with both slackClient and botToken registers all 4 actions", () => {
+  it("with both slackClient and botToken registers base + Slack actions", () => {
     const reg = bootstrapActionCatalog({ slackClient: makeSlackClient(), botToken: "xoxb-fake" });
     const names = reg.list().map((a) => a.name);
-    expect(names).toContain("coperniqFirestoreIngest");
+    for (const n of BASE_ACTIONS) {
+      expect(names).toContain(n);
+    }
     expect(names).toContain("dm_user");
     expect(names).toContain("post_to_channel");
     expect(names).toContain("reply_in_thread");
-    expect(names).toHaveLength(4);
+    expect(names).toHaveLength(BASE_ACTIONS.length + 3);
   });
 });
