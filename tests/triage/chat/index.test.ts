@@ -6,6 +6,7 @@ import { createEmbeddingService } from "../../../src/sentinel/embeddings/service
 import { handleChatMessage } from "../../../src/triage/chat/index.js";
 import type { ChatHandlerDeps } from "../../../src/triage/chat/index.js";
 import type { LlmClient } from "../../../src/triage/llm-client.js";
+import type { ResearchBundle } from "../../../src/triage/research-bundle.js";
 
 function makeStubLlm(reasonerJson: string, responderJson: string): LlmClient {
   let callCount = 0;
@@ -233,5 +234,54 @@ describe("handleChatMessage — RAG context", () => {
     );
 
     expect(slackPosts).toHaveLength(1);
+  });
+
+  it("includes researchBundle in the responder prompt when provided", async () => {
+    const capturedPrompts: string[] = [];
+    const llm: LlmClient = {
+      complete: vi.fn(async (prompt: string) => {
+        capturedPrompts.push(prompt);
+        if (prompt.includes("Conversation context:")) {
+          return JSON.stringify({ findings: [], followups: [] });
+        }
+        return "reply text";
+      }),
+    };
+    const slackPosts: Array<{ channel: string; text: string }> = [];
+    const bundle: ResearchBundle = {
+      entries: [
+        {
+          step_idx: 0,
+          action: "firestoreCount",
+          args: { collection: "vero_projects" },
+          status: "success",
+          result: { collection: "vero_projects", count: 224 },
+          invoked_at: 1,
+        },
+      ],
+      truncated: false,
+      total_bytes: 100,
+    };
+    await handleChatMessage(
+      {
+        userMessage: "how many projects?",
+        channel: "D12345",
+        isDm: true,
+        researchBundle: bundle,
+      },
+      {
+        llm,
+        slackPost: async (p) => {
+          slackPosts.push({ channel: p.channel, text: p.text });
+        },
+      },
+    );
+    expect(slackPosts).toHaveLength(1);
+    // Responder prompt (second LLM call) should contain the bundle
+    const responderPrompt = capturedPrompts.find((p) => p.includes("Research results"));
+    expect(responderPrompt).toBeDefined();
+    expect(responderPrompt).toContain("firestoreCount");
+    expect(responderPrompt).toContain("vero_projects");
+    expect(responderPrompt).toContain("224");
   });
 });

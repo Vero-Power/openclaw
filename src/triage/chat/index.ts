@@ -3,6 +3,7 @@ import type { Database as DatabaseType } from "better-sqlite3";
 import type { EmbeddingService } from "../../sentinel/embeddings/service.js";
 import type { Recommendation } from "../../sentinel/oracle/store.js";
 import type { LlmClient } from "../llm-client.js";
+import type { ResearchBundle } from "../research-bundle.js";
 import {
   detectActionRecommendationIntent,
   formatRecommendationsReply,
@@ -55,6 +56,7 @@ export async function handleChatMessage(
     isDm: boolean;
     convoContext?: { full: string; history: string };
     requesterUserId?: string;
+    researchBundle?: ResearchBundle;
   },
   deps: ChatHandlerDeps,
 ): Promise<void> {
@@ -124,6 +126,7 @@ export async function handleChatMessage(
     queuedActions,
     failedToQueue,
     conversationHistory: input.convoContext?.history,
+    researchBundle: input.researchBundle,
   });
 
   await deps.slackPost({

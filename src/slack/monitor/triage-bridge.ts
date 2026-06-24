@@ -20,6 +20,7 @@ import {
   handleChatMessage,
 } from "../../triage/index.js";
 import type { LlmClient } from "../../triage/llm-client.js";
+import type { ResearchBundle } from "../../triage/research-bundle.js";
 import type { Plan } from "../../triage/types.js";
 import type { SlackMessageEvent } from "../types.js";
 import type { SlackMonitorContext } from "./context.js";
@@ -395,6 +396,7 @@ async function routeToChat(
   event: SlackMessageEvent,
   ctx: SlackMonitorContext,
   convoContext?: ConversationContext,
+  researchBundle?: ResearchBundle,
 ): Promise<void> {
   const isDm = event.channel?.startsWith("D") ?? false;
   await handleChatMessage(
@@ -405,6 +407,7 @@ async function routeToChat(
       isDm,
       requesterUserId: event.user,
       convoContext: convoContext && convoContext.full !== "" ? convoContext : undefined,
+      ...(researchBundle ? { researchBundle } : {}),
     },
     {
       llm: llmClient,
