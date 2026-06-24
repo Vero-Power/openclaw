@@ -119,9 +119,38 @@ async function decideLlm(
 }
 
 /**
+ * Inline staleness threshold for open conversations. Measures time since the
+ * PERSON's last turn — JR's own follow-up questions don't reset the clock. If the
+ * person never replied, falls back to opened_at.
+ *
+ * The sentinel cycle's periodic `expireStale` runs every ~2h with the same
+ * semantics; this inline check catches conversations going stale between sweeps so
+ * an incoming DM gets routed to triage as a fresh task instead of being absorbed
+ * by a long-dead inquiry.
+ *
+ * Override with OPENCLAW_CONVO_INLINE_STALE_HOURS (defaults to 1).
+ */
+function inlineStaleMs(): number {
+  const raw = process.env.OPENCLAW_CONVO_INLINE_STALE_HOURS;
+  const hours = raw ? Number(raw) : NaN;
+  const valid = Number.isFinite(hours) && hours > 0 ? hours : 1;
+  return valid * 60 * 60 * 1000;
+}
+
+function lastPersonTurnTs(turns: Array<{ sender: string; ts: number }>): number | null {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    if (turns[i].sender === "person") {
+      return turns[i].ts;
+    }
+  }
+  return null;
+}
+
+/**
  * Handle an incoming DM reply. Returns true if the message was consumed by an active
- * conversation (caller should stop processing). Returns false if no conversation is open
- * for this person.
+ * conversation (caller should stop processing). Returns false if no open conversation
+ * exists, OR if the open conversation is stale enough that the message should be
+ * treated as a fresh task and routed to triage instead.
  */
 export async function handleConversationReply(
   event: ConversationReplyEvent,
@@ -130,6 +159,19 @@ export async function handleConversationReply(
 ): Promise<boolean> {
   const conversation = deps.store.findOpenForPerson(event.user);
   if (!conversation) {
+    return false;
+  }
+
+  // Inline staleness check — measure time since the PERSON's last reply.
+  // JR's follow-up turns don't reset the clock; only the human's responses do.
+  // If the person never replied, fall back to opened_at.
+  const baseline = lastPersonTurnTs(conversation.turns) ?? conversation.opened_at;
+  if (Date.now() - baseline > inlineStaleMs()) {
+    deps.store.close(
+      conversation.id,
+      "dropped",
+      "Auto-closed on next DM: 1h since the person's last reply (or since open). Turns preserved for recall.",
+    );
     return false;
   }
 

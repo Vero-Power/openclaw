@@ -92,6 +92,56 @@ describe("handleConversationReply", () => {
     expect(completeFn).toHaveBeenCalledOnce();
   });
 
+  it("returns false and closes conversation when it has gone stale past the inline window", async () => {
+    // Use a small env override so we don't need to fake the system clock.
+    const prev = process.env.OPENCLAW_CONVO_INLINE_STALE_HOURS;
+    process.env.OPENCLAW_CONVO_INLINE_STALE_HOURS = "0.001"; // ~3.6 seconds
+    try {
+      store.open({
+        person_user_id: "U_ALICE",
+        channel: "D_CH1",
+        topic: "Stale topic",
+        opening_message: "Are you still around?",
+      });
+      // Wait long enough to exceed the 3.6s inline window.
+      await new Promise((r) => setTimeout(r, 50));
+      // Reach in and backdate the conversation so it's well past the 3.6s threshold without sleeping.
+      db.prepare(
+        "UPDATE conversations SET opened_at = ?, last_turn_at = ? WHERE person_user_id = ?",
+      ).run(Date.now() - 60_000, Date.now() - 60_000, "U_ALICE");
+
+      const completeFn = vi.fn(async () =>
+        JSON.stringify({ action: "close_with_thanks", wrapup: "ok" }),
+      );
+      const llm: LlmClient = { complete: completeFn };
+
+      const result = await handleConversationReply(makeEvent(), ctx, {
+        store,
+        llm,
+        db,
+        postMessage,
+      });
+
+      expect(result).toBe(false);
+      expect(completeFn).not.toHaveBeenCalled();
+      expect(posted).toEqual([]);
+
+      // Conversation is now closed (dropped), and turns are preserved for recall.
+      const row = db
+        .prepare("SELECT state, takeaway, turns FROM conversations WHERE person_user_id = ?")
+        .get("U_ALICE") as { state: string; takeaway: string | null; turns: string };
+      expect(row.state).toBe("dropped");
+      expect(row.takeaway).toMatch(/Auto-closed/);
+      expect(JSON.parse(row.turns)).toHaveLength(1); // opening turn preserved
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_CONVO_INLINE_STALE_HOURS;
+      } else {
+        process.env.OPENCLAW_CONVO_INLINE_STALE_HOURS = prev;
+      }
+    }
+  });
+
   it("ask_followup: posts next question and conversation stays open", async () => {
     store.open({
       person_user_id: "U_ALICE",
