@@ -7,11 +7,14 @@ export interface RagContextDeps {
 }
 
 const RAG_THRESHOLD = 0.5;
-// Higher bar for observations — they're the noisiest source (channel
-// silence pings, weather forecasts, raw GCF execution counts). Without
-// this we'd dilute the prompt with low-signal hits that happen to share
-// a keyword with the user's message.
-const RAG_OBS_THRESHOLD = 0.65;
+// Slightly higher bar for observations — they're the noisiest source
+// (channel silence pings, weather forecasts, raw GCF execution counts).
+// Original v1 picked 0.65 defensively, but live smoke (PR #13 follow-up)
+// showed legit topical insights for the same query clustered at 0.55-0.58,
+// meaning 0.65 was filtering observations in the SAME similarity band as
+// the curated sources. 0.55 keeps a small lift over the curated 0.5
+// without gating out genuine matches.
+const RAG_OBS_THRESHOLD = 0.55;
 const RAG_K_INSIGHTS = 3;
 const RAG_K_ORACLE = 2;
 const RAG_K_OBS = 3;

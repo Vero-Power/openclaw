@@ -133,7 +133,7 @@ describe("buildRagContext", () => {
        (id, assignee_email, title, rationale, evidence, scope, urgency, confidence, data, first_seen_at, last_seen_at, embedding)
        VALUES ('r1', 'x@example.com', 'a rec', 'r', '[]', 'tactical', 'high', 'high', '{}', 1, 1, ?)`,
     ).run(encodeEmbedding(unitVector(0)));
-    // Recent observation that should clear the higher OBS threshold (0.65)
+    // Recent observation that should clear the OBS threshold (0.55)
     db.prepare(
       `INSERT INTO observations (source, topic, timestamp, summary, embedding, created_at)
        VALUES ('slack-channels', 'channel:CABC', ?, 'recent observation text', ?, 1)`,
@@ -153,13 +153,14 @@ describe("buildRagContext", () => {
     expect(out).toContain("recent observation text");
   });
 
-  it("observations cap at k=3 and only clear the higher 0.65 threshold", async () => {
-    // Cosine of e_0 against itself is 1.0; against (0.7, sqrt(1-0.49)) it's 0.7.
-    // To represent "below 0.65" without leaving threshold ambiguity, we use 0.6.
+  it("observations cap at k=3 and only clear the 0.55 obs threshold", async () => {
+    // Cosine of e_0 against itself is 1.0. We pick a "below" vector at cosine
+    // 0.5 against e_0 — clearly under the 0.55 obs threshold, well above
+    // an orthogonal noise vector.
     const above = unitVector(0);
     const below = new Float32Array(768);
-    below[0] = 0.6;
-    below[1] = Math.sqrt(1 - 0.36);
+    below[0] = 0.5;
+    below[1] = Math.sqrt(1 - 0.25);
 
     for (let i = 0; i < 5; i++) {
       db.prepare(
