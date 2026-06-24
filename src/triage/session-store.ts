@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Database as DatabaseType } from "better-sqlite3";
+import {
+  emptyBundle,
+  type ResearchBundle,
+  serializeBundleForStorage,
+  deserializeBundleFromStorage,
+} from "./research-bundle.js";
 import { canTransition } from "./state-machine.js";
 import type {
   TriageSession,
@@ -191,6 +197,24 @@ export class SessionStore {
     this.db
       .prepare("UPDATE triage_sessions SET execution_log = ?, updated_at = ? WHERE request_id = ?")
       .run(JSON.stringify(log), Date.now(), request_id);
+  }
+
+  getBundle(request_id: string): ResearchBundle {
+    const row = this.db
+      .prepare("SELECT research_bundle FROM triage_sessions WHERE request_id = ?")
+      .get(request_id) as { research_bundle: string | null } | undefined;
+    if (!row) {
+      return emptyBundle();
+    }
+    return deserializeBundleFromStorage(row.research_bundle);
+  }
+
+  setBundle(request_id: string, bundle: ResearchBundle): void {
+    this.db
+      .prepare(
+        "UPDATE triage_sessions SET research_bundle = ?, updated_at = ? WHERE request_id = ?",
+      )
+      .run(serializeBundleForStorage(bundle), Date.now(), request_id);
   }
 
   setFailedAtStep(request_id: string, step_idx: number): void {
