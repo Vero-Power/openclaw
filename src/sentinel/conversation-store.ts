@@ -87,10 +87,19 @@ export class ConversationStore {
       WHERE id = ?
     `);
 
+    // Idle = no person reply within maxIdleMs. JR's own follow-up turns don't reset
+    // the timer (the timer measures "time waiting on the human"). Falls back to
+    // opened_at when the person has never replied yet.
     this.stmtExpireStale = db.prepare(`
       UPDATE conversations
       SET state = 'dropped', closed_at = ?
-      WHERE state = 'open' AND last_turn_at < ?
+      WHERE state = 'open'
+        AND COALESCE(
+          (SELECT MAX(CAST(json_extract(value, '$.ts') AS INTEGER))
+           FROM json_each(turns)
+           WHERE json_extract(value, '$.sender') = 'person'),
+          opened_at
+        ) < ?
     `);
   }
 

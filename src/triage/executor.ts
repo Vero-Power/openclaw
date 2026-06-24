@@ -9,6 +9,22 @@ export interface ExecutorDeps {
   slack: SlackBridge;
 }
 
+/**
+ * Action results may set a `_display` field with pre-formatted Slack markdown.
+ * When present, we use it verbatim as the excerpt (no JSON noise, no truncation).
+ * Falls back to the historical 200-char JSON excerpt for actions that haven't
+ * adopted the convention.
+ */
+function pickExcerpt(r: unknown): string {
+  if (r && typeof r === "object" && "_display" in r) {
+    const d = (r as Record<string, unknown>)["_display"];
+    if (typeof d === "string" && d.length > 0) {
+      return d;
+    }
+  }
+  return JSON.stringify(r).slice(0, 200);
+}
+
 export class Executor {
   constructor(private deps: ExecutorDeps) {}
 
@@ -90,7 +106,7 @@ export class Executor {
       const r = await this.deps.registry.invoke(step.action, step.args, ctx);
       return {
         status: "success",
-        excerpt: JSON.stringify(r).slice(0, 200),
+        excerpt: pickExcerpt(r),
         retried: false,
       };
     } catch (err1) {
@@ -98,7 +114,7 @@ export class Executor {
         const r = await this.deps.registry.invoke(step.action, step.args, ctx);
         return {
           status: "retried_success",
-          excerpt: JSON.stringify(r).slice(0, 200),
+          excerpt: pickExcerpt(r),
           retried: true,
         };
       } catch (err2) {

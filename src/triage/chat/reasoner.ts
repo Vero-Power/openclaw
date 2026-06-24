@@ -21,6 +21,8 @@ Given a user message in JR's Slack DM or channel mention, produce a JSON analysi
 
 Be terse. The responder will read your findings and produce the actual reply.
 
+HARD RULE — NEVER FABRICATE DATA. If the user is asking for SPECIFIC data — a record by id, a count, a list, fields of a collection, "show me X", "pull up Y" — and that data is NOT in the conversation context, your findings MUST explicitly say so. Example findings: "User asked for project 737955 but no data is in context. JR routed this to chat mode instead of a data action. JR must say honestly that the lookup didn't run and offer to retry — must NOT invent fields, values, names, or placeholder data like 'Jane Doe' / '123 Main St' / 'Central Park Renovation'." The honest response ("I couldn't fetch that — want me to try again?") is required when the data layer wasn't reached.
+
 Return JSON only, no markdown fences.`;
 
 function buildFollowupBlock(knownAliases: string[]): string {

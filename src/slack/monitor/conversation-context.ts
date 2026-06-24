@@ -56,6 +56,10 @@ const MAX_MESSAGES = 15;
 const MAX_MSG_CHARS = 300;
 const FOLLOWUP_WINDOW_MS = 48 * 60 * 60 * 1000;
 const TAKEAWAY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const RECALL_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+const RECALL_MAX_CONVOS = 2;
+const RECALL_TURNS_PER_CONVO = 4;
+const RECALL_TURN_CHARS = 280;
 
 function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
@@ -93,7 +97,8 @@ export class ConversationContextBuilder {
     const history = await this.historySection(input);
     const actions = this.actionsSection(input);
     const takeaways = this.takeawaysSection(input.userId);
-    const sections = [history, actions, takeaways].filter((s) => s !== "");
+    const recall = this.recallSection(input.userId);
+    const sections = [history, actions, takeaways, recall].filter((s) => s !== "");
     if (sections.length === 0) {
       return { full: "", history: "" };
     }
@@ -200,6 +205,60 @@ export class ConversationContextBuilder {
       }
       const lines = rows.map((r) => `- (${r.topic}) ${r.takeaway}`);
       return `RECENT TAKEAWAYS from your past conversations with this person:\n${lines.join("\n")}`;
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * Surface the last N turns from the most recent closed sentinel conversation(s) with
+   * this person, so JR has continuity across auto-closed/stale-dropped conversations.
+   * Skips currently-open conversations (those are reflected in live history already).
+   */
+  private recallSection(userId: string): string {
+    if (!this.deps.db) {
+      return "";
+    }
+    try {
+      const rows = this.deps.db
+        .prepare(
+          `SELECT topic, turns, state, closed_at FROM conversations
+           WHERE person_user_id = ?
+             AND state != 'open'
+             AND COALESCE(closed_at, opened_at) >= ?
+           ORDER BY COALESCE(closed_at, opened_at) DESC
+           LIMIT ?`,
+        )
+        .all(userId, Date.now() - RECALL_WINDOW_MS, RECALL_MAX_CONVOS) as Array<{
+        topic: string;
+        turns: string | null;
+        state: string;
+        closed_at: number | null;
+      }>;
+      if (rows.length === 0) {
+        return "";
+      }
+      const blocks: string[] = [];
+      for (const r of rows) {
+        const parsed: Array<{ sender: string; text: string; ts?: number }> = r.turns
+          ? (JSON.parse(r.turns) as Array<{ sender: string; text: string; ts?: number }>)
+          : [];
+        if (parsed.length === 0) {
+          continue;
+        }
+        const recent = parsed.slice(-RECALL_TURNS_PER_CONVO);
+        const turnLines = recent.map((t) => {
+          const who = t.sender === "jr" ? "JR" : "Person";
+          const text = (t.text ?? "").slice(0, RECALL_TURN_CHARS);
+          return `  ${who}: ${text}`;
+        });
+        const header = `- topic: ${r.topic} (${r.state})`;
+        blocks.push([header, ...turnLines].join("\n"));
+      }
+      if (blocks.length === 0) {
+        return "";
+      }
+      return `PRIOR CONVERSATIONS with this person (closed/dropped within last ${RECALL_WINDOW_MS / (24 * 60 * 60 * 1000)} days; last few turns shown so you don't repeat yourself):\n${blocks.join("\n\n")}`;
     } catch {
       return "";
     }

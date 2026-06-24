@@ -265,6 +265,65 @@ describe("ConversationStore", () => {
       expect(found?.state).toBe("open");
     });
 
+    it("treats JR-only turns as no person reply — staleness measured from opened_at", () => {
+      const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+      // Conversation has only JR turns (no person reply). last_turn_at is recent
+      // (because JR sent a follow-up 1 minute ago), but staleness should be
+      // measured from opened_at since the PERSON never replied.
+      const oneMinuteAgo = Date.now() - 60 * 1000;
+      const turns = JSON.stringify([
+        { sender: "jr", text: "First question", ts: twoHoursAgo },
+        { sender: "jr", text: "Bump", ts: oneMinuteAgo },
+      ]);
+      db.prepare(`
+        INSERT INTO conversations
+          (person_user_id, channel, topic, opening_message, state, turns, opened_at, last_turn_at)
+        VALUES ('U_NOREPLY', 'D_NR', 'test', 'First question', 'open', ?, ?, ?)
+      `).run(turns, twoHoursAgo, oneMinuteAgo);
+
+      // 1 hour TTL: opened 2h ago, no person reply → should expire
+      const count = store.expireStale(60 * 60 * 1000);
+      expect(count).toBe(1);
+    });
+
+    it("JR follow-up after person reply does NOT reset the stale clock", () => {
+      const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+      const personReplyAt = Date.now() - 90 * 60 * 1000; // 1.5h ago
+      const jrBumpAt = Date.now() - 30 * 1000; // 30s ago (very recent)
+      const turns = JSON.stringify([
+        { sender: "jr", text: "Q1", ts: twoHoursAgo },
+        { sender: "person", text: "answer", ts: personReplyAt },
+        { sender: "jr", text: "Q2 (bump)", ts: jrBumpAt },
+      ]);
+      db.prepare(`
+        INSERT INTO conversations
+          (person_user_id, channel, topic, opening_message, state, turns, opened_at, last_turn_at)
+        VALUES ('U_BUMP', 'D_BUMP', 'test', 'Q1', 'open', ?, ?, ?)
+      `).run(turns, twoHoursAgo, jrBumpAt);
+
+      // 1 hour TTL. Person last replied 1.5h ago → should expire even though
+      // JR's own turn was 30s ago.
+      const count = store.expireStale(60 * 60 * 1000);
+      expect(count).toBe(1);
+    });
+
+    it("conversation with a fresh person reply stays open", () => {
+      const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+      const recentPersonReply = Date.now() - 10 * 60 * 1000; // 10 min ago
+      const turns = JSON.stringify([
+        { sender: "jr", text: "Q1", ts: twoHoursAgo },
+        { sender: "person", text: "recent reply", ts: recentPersonReply },
+      ]);
+      db.prepare(`
+        INSERT INTO conversations
+          (person_user_id, channel, topic, opening_message, state, turns, opened_at, last_turn_at)
+        VALUES ('U_FRESH_REPLY', 'D_FR', 'test', 'Q1', 'open', ?, ?, ?)
+      `).run(turns, twoHoursAgo, recentPersonReply);
+
+      const count = store.expireStale(60 * 60 * 1000);
+      expect(count).toBe(0);
+    });
+
     it("does not touch terminal-state rows (closed, dropped, opt-out)", () => {
       const pastTime = Date.now() - 10 * 24 * 60 * 60 * 1000;
 

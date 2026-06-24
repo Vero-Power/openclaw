@@ -223,6 +223,23 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     ...prefixOptions,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     deliver: async (payload) => {
+      // Filter out leaked partial-tag fragments. The agent sometimes wraps replies in
+      // XML-style tags like <final_response>...</final_response> and the upstream
+      // chunker emits the opening fragment ("<final") as its own chunk. Skip anything
+      // that looks like a broken tag: starts with '<', has no '>', is short, and has
+      // no whitespace.
+      const trimmed = (payload.text ?? "").trim();
+      const looksLikePartialTag =
+        trimmed.length > 0 &&
+        trimmed.length < 32 &&
+        trimmed.startsWith("<") &&
+        !trimmed.includes(">") &&
+        !/\s/.test(trimmed);
+      if (looksLikePartialTag) {
+        runtime.log(`[dispatch] dropping partial-tag fragment: "${trimmed}"`);
+        return;
+      }
+
       if (useStreaming) {
         await deliverWithStreaming(payload);
         return;
