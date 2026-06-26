@@ -172,15 +172,20 @@ export class Reporter {
     this.writeFile(relPath, lines.join("\n"));
     this.recordReport("weekly-digest", relPath);
 
-    // DM Kaleb with top 3
-    if (this.deps.dmUser && this.deps.kalebUserId) {
+    // DM Kaleb + Ridge with top 3
+    if (this.deps.dmUser) {
       const dmBody = `*Weekly digest filed:* \`${relPath}\`\n\nTop ${Math.min(3, insights.length)} insights:\n${insights
         .slice(0, 3)
         .map(
           (i, idx) => `${idx + 1}. *${i.summary}* (${i.category}, conf ${i.confidence.toFixed(2)})`,
         )
         .join("\n")}`;
-      await this.deps.dmUser(this.deps.kalebUserId, dmBody);
+      if (this.deps.kalebUserId) {
+        await this.deps.dmUser(this.deps.kalebUserId, dmBody);
+      }
+      if (this.deps.ridgeUserId) {
+        await this.deps.dmUser(this.deps.ridgeUserId, dmBody);
+      }
     }
 
     return { filedTo: relPath };

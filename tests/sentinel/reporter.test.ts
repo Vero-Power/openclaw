@@ -99,7 +99,7 @@ describe("Reporter — weekly + ideas", () => {
     rmSync(libPath, { recursive: true, force: true });
   });
 
-  it("writeWeeklyDigest writes a markdown file + DMs Kaleb", async () => {
+  it("writeWeeklyDigest writes a markdown file + DMs Kaleb and Ridge", async () => {
     const db = openSentinelDb(dbPath);
     const now = Date.now();
     db.prepare(
@@ -121,9 +121,15 @@ describe("Reporter — weekly + ideas", () => {
     });
     const result = await reporter.writeWeeklyDigest();
     expect(result.filedTo).toContain("reports/weekly/");
-    expect(dmCalls).toHaveLength(1);
-    expect(dmCalls[0].user).toBe("U_KALEB");
-    expect(dmCalls[0].text).toContain("Weekly digest");
+    expect(dmCalls).toHaveLength(2);
+    const kalebDM = dmCalls.find((d) => d.user === "U_KALEB");
+    const ridgeDM = dmCalls.find((d) => d.user === "U_RIDGE");
+    expect(kalebDM).toBeDefined();
+    expect(ridgeDM).toBeDefined();
+    expect(kalebDM!.text).toContain("Weekly digest");
+    expect(ridgeDM!.text).toContain("Weekly digest");
+    // Both recipients get the same body — Ridge isn't a downgraded version.
+    expect(ridgeDM!.text).toBe(kalebDM!.text);
     db.close();
   });
 
