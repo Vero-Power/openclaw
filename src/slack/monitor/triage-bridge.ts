@@ -8,6 +8,7 @@ import type { SpawnTaskInput } from "../../sentinel/followup-processor.js";
 import type { Recommendation } from "../../sentinel/oracle/store.js";
 import type { SlackClientLike } from "../../triage/actions/index.js";
 import { SLACK_USER_ALIASES } from "../../triage/actions/slack/aliases.js";
+import { Auditor } from "../../triage/auditor.js";
 import {
   Classifier,
   Planner,
@@ -19,6 +20,7 @@ import {
   handleChatMessage,
 } from "../../triage/index.js";
 import type { LlmClient } from "../../triage/llm-client.js";
+import type { ResearchBundle } from "../../triage/research-bundle.js";
 import type { Plan } from "../../triage/types.js";
 import type { SlackMessageEvent } from "../types.js";
 import type { SlackMonitorContext } from "./context.js";
@@ -69,6 +71,7 @@ let lazyStore: SessionStore | null = null;
 let lazyRegistry: ReturnType<typeof bootstrapActionCatalog> | null = null;
 let lazyClassifier: Classifier | null = null;
 let lazyPlanner: Planner | null = null;
+let lazyAuditor: Auditor | null = null;
 let lazyContextBuilder: ConversationContextBuilder | null = null;
 
 const STALE_SESSION_IDLE_MS = 30 * 60 * 1000; // 30 minutes
@@ -103,6 +106,20 @@ function getPlanner(): Planner {
     lazyPlanner = new Planner(llmClient, getRegistry(), { userAliases: SLACK_USER_ALIASES });
   }
   return lazyPlanner;
+}
+
+function getAuditor(): Auditor {
+  if (!lazyAuditor) {
+    lazyAuditor = new Auditor({
+      llm: llmClient,
+      knownActions: new Set(
+        getRegistry()
+          .list()
+          .map((a) => a.name),
+      ),
+    });
+  }
+  return lazyAuditor;
 }
 
 // F3 Oracle — set once by the provider after createSentinel resolves. The chat
@@ -307,6 +324,56 @@ export async function handleThreadReplyForActiveTriage(
       slack: slackBridge,
     });
     await exec.run(active.request_id);
+
+    // Audit: was the data sufficient? If not, run up to one round of follow-up steps.
+    try {
+      const auditor = getAuditor();
+      const bundleAfter = getStore().getBundle(active.request_id);
+      const plan = active.final_plan;
+      if (plan) {
+        const audit = await auditor.audit({
+          question: active.requester_message ?? event.text ?? "",
+          plan,
+          bundle: bundleAfter,
+        });
+        ctx.runtime.log(`[auditor] sufficient=${audit.sufficient} (${audit.rationale})`);
+        if (!audit.sufficient && audit.additional_steps && audit.additional_steps.length > 0) {
+          // Execute the follow-up steps as if they were a fresh mini-plan.
+          // The Executor already appends results to the bundle, so the
+          // responder will see both rounds.
+          const followupPlan: Plan = {
+            steps: audit.additional_steps,
+            confidence: plan.confidence,
+            summary: `follow-up: ${audit.rationale}`,
+          };
+          getStore().setFinalPlan(active.request_id, followupPlan);
+          getStore().transition(active.request_id, "EXECUTING");
+          await exec.run(active.request_id);
+        }
+      }
+    } catch (err) {
+      ctx.runtime.log(`[auditor] error during audit-replan: ${(err as Error).message}`);
+    }
+
+    // Hand the populated research bundle to the responder so the user gets a
+    // grounded reply (not just the executor's per-step excerpt summary).
+    // The synthetic event carries the *original* question text — event.text
+    // here is "yes" / "go" / etc. (the approval signal), which would mislead
+    // the responder.
+    try {
+      const finalSession = getStore().get(active.request_id);
+      const bundle = getStore().getBundle(active.request_id);
+      if (finalSession?.state === "COMPLETE" && bundle.entries.length > 0) {
+        const convoContext = await buildConvoContext(event, ctx);
+        const groundedEvent: SlackMessageEvent = {
+          ...event,
+          text: active.requester_message ?? event.text ?? "",
+        };
+        await routeToChat(groundedEvent, ctx, convoContext, bundle);
+      }
+    } catch (err) {
+      ctx.runtime.log(`[triage] grounded responder reply failed: ${(err as Error).message}`);
+    }
   } else if (signal.kind === "cancel") {
     getStore().transition(active.request_id, "CANCELLED");
     await ctx.app.client.chat.postMessage({
@@ -349,6 +416,7 @@ async function routeToChat(
   event: SlackMessageEvent,
   ctx: SlackMonitorContext,
   convoContext?: ConversationContext,
+  researchBundle?: ResearchBundle,
 ): Promise<void> {
   const isDm = event.channel?.startsWith("D") ?? false;
   await handleChatMessage(
@@ -359,6 +427,7 @@ async function routeToChat(
       isDm,
       requesterUserId: event.user,
       convoContext: convoContext && convoContext.full !== "" ? convoContext : undefined,
+      ...(researchBundle ? { researchBundle } : {}),
     },
     {
       llm: llmClient,

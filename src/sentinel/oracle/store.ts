@@ -89,6 +89,18 @@ export class OracleStore {
     return list.toSorted((a, b) => URGENCY_RANK[b.urgency] - URGENCY_RANK[a.urgency]);
   }
 
+  recentDMdTitles(assigneeEmail: string, sinceMs: number): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT r.title FROM oracle_dms_sent s
+         JOIN oracle_recommendations r ON r.id = s.rec_id
+         WHERE s.assignee_email = ? AND s.sent_at >= ?
+         ORDER BY s.sent_at DESC`,
+      )
+      .all(assigneeEmail, sinceMs) as Array<{ title: string }>;
+    return rows.map((r) => r.title);
+  }
+
   markDMsSent(entries: Array<{ rec_id: string; assignee_email: string }>): void {
     const now = Date.now();
     const stmt = this.db.prepare(

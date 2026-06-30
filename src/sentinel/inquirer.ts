@@ -7,6 +7,7 @@ import type { ConversationStore } from "./conversation-store.js";
 import { cosineSimilarity } from "./embeddings/cosine.js";
 import type { EmbeddingService } from "./embeddings/service.js";
 import type { ChannelNameResolver } from "./slack-resolvers.js";
+import { filterMutedQuestions, loadTopicMutes } from "./topic-mutes.js";
 
 const INQUIRER_COOLDOWN_MS = 48 * 60 * 60 * 1000;
 // Cosine threshold for semantic topic-similarity. Lower than oracle's 0.85
@@ -240,8 +241,16 @@ export class Inquirer {
     // made-up or randomly-guessed user IDs.
     const allowedUserIds = new Set(Object.values(this.deps.userAliases));
 
-    const eligible = parsed.questions.filter(
-      (q) => allowedUserIds.has(q.target_user_id) && !optedOut.has(q.target_user_id),
+    // Durable topic mutes: drop questions the person has already settled (e.g.
+    // "yes, #jr-time / #vero-management are still in use"). Unlike the 48h
+    // cooldown, these never expire — they stop the same low-confidence insight
+    // from re-forming the same question weeks later.
+    const topicMutes = loadTopicMutes(this.deps.db);
+    const eligible = filterMutedQuestions(
+      parsed.questions.filter(
+        (q) => allowedUserIds.has(q.target_user_id) && !optedOut.has(q.target_user_id),
+      ),
+      topicMutes,
     );
 
     // Enrich question texts for display (queue file + DM). Raw text is kept in

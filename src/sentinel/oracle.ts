@@ -4,6 +4,7 @@ import type { LlmClient } from "../triage/llm-client.js";
 import type { EmbeddedTable, EmbeddingService } from "./embeddings/service.js";
 import { buildCompanyContext } from "./observers/external-context/company-context.js";
 import type { CompanyContextFirestoreLike } from "./observers/external-context/company-context.js";
+import { hasActionableEvidence, isDuplicateOfRecent } from "./oracle/dm-filter.js";
 import { writePerPersonFile } from "./oracle/file-writer.js";
 import { buildPeopleDirectory } from "./oracle/people-directory.js";
 import type { PersonDirectoryEntry } from "./oracle/people-directory.js";
@@ -36,6 +37,7 @@ const ORACLE_DEDUP_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 const ORACLE_TABLE: EmbeddedTable = "oracle_recommendations";
 
 const MAX_DMS_PER_ASSIGNEE_PER_CYCLE = 5;
+const DM_DEDUPE_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
 function stableId(title: string, evidence: string[]): string {
   const sorted = evidence.toSorted();
@@ -313,15 +315,46 @@ export function createOracle(deps: OracleDeps): Oracle {
           if (!slackId) {
             continue;
           }
-          const newRecs = store.diffNewForAssignee(email).filter((r) => r.confidence === "high");
-          if (newRecs.length === 0) {
+          const candidateRecs = store
+            .diffNewForAssignee(email)
+            .filter((r) => r.confidence === "high");
+          if (candidateRecs.length === 0) {
             continue;
           }
-          const toDM = newRecs.slice(0, MAX_DMS_PER_ASSIGNEE_PER_CYCLE);
+          // Gate 1 — title dedupe against recently DM'd titles to this person.
+          const recentTitles = store.recentDMdTitles(email, Date.now() - DM_DEDUPE_WINDOW_MS);
+          // Gate 2 — evidence quality: Vero-specific quantitative or hard deadline.
+          const filteredRecs: Recommendation[] = [];
+          for (const rec of candidateRecs) {
+            if (isDuplicateOfRecent(rec.title, recentTitles)) {
+              continue;
+            }
+            const quality = hasActionableEvidence(rec);
+            if (!quality.ok) {
+              continue;
+            }
+            filteredRecs.push(rec);
+            // Reserve this title against later sibling candidates in the
+            // same cycle so we don't DM "TDLR registration" twice in one pass.
+            recentTitles.push(rec.title);
+          }
+          if (filteredRecs.length === 0) {
+            continue;
+          }
+          const toDM = filteredRecs.slice(0, MAX_DMS_PER_ASSIGNEE_PER_CYCLE);
+          // Mark filtered-out recs as DM'd so they don't keep cycling back
+          // through diffNewForAssignee on every Sentinel pass. The rec still
+          // lives in the per-person file; we just won't interrupt over it.
+          const suppressedRecs = candidateRecs.filter(
+            (r) => !filteredRecs.some((f) => f.id === r.id),
+          );
+          if (suppressedRecs.length > 0) {
+            store.markDMsSent(suppressedRecs.map((r) => ({ rec_id: r.id, assignee_email: email })));
+          }
           const bullets = toDM.map((r) => `• ${r.title}`).join("\n");
           const extra =
-            newRecs.length > MAX_DMS_PER_ASSIGNEE_PER_CYCLE
-              ? `\n_…and ${newRecs.length - MAX_DMS_PER_ASSIGNEE_PER_CYCLE} more in your file._`
+            filteredRecs.length > MAX_DMS_PER_ASSIGNEE_PER_CYCLE
+              ? `\n_…and ${filteredRecs.length - MAX_DMS_PER_ASSIGNEE_PER_CYCLE} more in your file._`
               : "";
           try {
             await deps.dmUser(slackId, `Oracle: new on your plate\n\n${bullets}${extra}`);

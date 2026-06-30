@@ -10,7 +10,7 @@ const TRANSITIONS: Record<TriageState, ReadonlySet<TriageState>> = {
   EDITING: new Set(["AWAITING_APPROVAL", "CANCELLED", "ABANDONED"]),
   EXECUTING: new Set(["COMPLETE", "FAILED_AT_STEP", "CANCELLED"]),
   FAILED_AT_STEP: new Set(["CANCELLED"]),
-  COMPLETE: new Set([]),
+  COMPLETE: new Set(["EXECUTING"]),
   CANCELLED: new Set([]),
   ABANDONED: new Set([]),
 };

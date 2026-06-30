@@ -1,4 +1,5 @@
 import type { ActionRegistry } from "./actions/registry.js";
+import { appendEntry, type BundleEntry } from "./research-bundle.js";
 import type { SessionStore } from "./session-store.js";
 import type { SlackBridge } from "./slack-bridge.js";
 import type { Plan, PlanStep, ExecutionLogEntry } from "./types.js";
@@ -72,6 +73,23 @@ export class Executor {
       entry.result_excerpt = result.excerpt;
       entry.retried = result.retried;
 
+      // Capture FULL result into the research bundle (parallel to the 200-char
+      // excerpt path above). The responder reads the bundle, not the excerpts,
+      // so this is what makes JR cite real values.
+      const bundleBefore = this.deps.store.getBundle(request_id);
+      const bundleEntry: BundleEntry = {
+        step_idx: i,
+        action: step.action,
+        args: step.args,
+        status:
+          result.status === "success" || result.status === "retried_success" ? "success" : "error",
+        result: result.result,
+        error: result.error,
+        invoked_at: entry.started_at ?? Date.now(),
+      };
+      const bundleAfter = appendEntry(bundleBefore, bundleEntry);
+      this.deps.store.setBundle(request_id, bundleAfter);
+
       // Overwrite the latest log entry with the final status
       const cur = this.deps.store.get(request_id)!;
       cur.execution_log[cur.execution_log.length - 1] = entry;
@@ -90,7 +108,13 @@ export class Executor {
     step: PlanStep,
     request_id: string,
     ctxExt: { slack_post: SlackBridge["post"]; slack_edit: SlackBridge["edit"] },
-  ): Promise<{ status: ExecutionLogEntry["status"]; excerpt: string; retried: boolean }> {
+  ): Promise<{
+    status: ExecutionLogEntry["status"];
+    excerpt: string;
+    retried: boolean;
+    result?: unknown;
+    error?: string;
+  }> {
     const ctx = {
       request_id,
       slack_post: ctxExt.slack_post,
@@ -108,6 +132,7 @@ export class Executor {
         status: "success",
         excerpt: pickExcerpt(r),
         retried: false,
+        result: r,
       };
     } catch (err1) {
       try {
@@ -116,12 +141,14 @@ export class Executor {
           status: "retried_success",
           excerpt: pickExcerpt(r),
           retried: true,
+          result: r,
         };
       } catch (err2) {
         return {
           status: "retried_error",
           excerpt: `${(err1 as Error).message} | retry: ${(err2 as Error).message}`,
           retried: true,
+          error: `${(err1 as Error).message} | retry: ${(err2 as Error).message}`,
         };
       }
     }

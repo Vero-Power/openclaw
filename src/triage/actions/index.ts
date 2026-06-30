@@ -1,3 +1,8 @@
+import { firestoreCollectionsAction } from "./firestore/collections.js";
+import { firestoreCountAction } from "./firestore/count.js";
+import { firestoreGetAction } from "./firestore/get.js";
+import { firestoreKeysAction } from "./firestore/keys.js";
+import { firestoreQueryAction } from "./firestore/query.js";
 import { coperniqFirestoreIngestAction } from "./gcf/coperniq-firestore-ingest.js";
 import { ActionRegistry } from "./registry.js";
 import { createDmUserAction } from "./slack/dm-user.js";
@@ -27,6 +32,11 @@ export interface ActionCatalogDeps {
 export function bootstrapActionCatalog(deps: ActionCatalogDeps = {}): ActionRegistry {
   const reg = new ActionRegistry();
   reg.register(coperniqFirestoreIngestAction);
+  reg.register(firestoreCollectionsAction);
+  reg.register(firestoreKeysAction);
+  reg.register(firestoreGetAction);
+  reg.register(firestoreQueryAction);
+  reg.register(firestoreCountAction);
   if (deps.slackClient && deps.botToken) {
     const slackDeps = { client: deps.slackClient, token: deps.botToken };
     reg.register(createDmUserAction(slackDeps));
