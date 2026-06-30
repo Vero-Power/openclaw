@@ -162,31 +162,16 @@ export async function handleConversationReply(
     return false;
   }
 
-  // Inline staleness check — measure time since the PERSON's last reply.
-  // JR's follow-up turns don't reset the clock; only the human's responses do.
-  // If the person never replied, fall back to opened_at.
-  const baseline = lastPersonTurnTs(conversation.turns) ?? conversation.opened_at;
-  if (Date.now() - baseline > inlineStaleMs()) {
-    deps.store.close(
-      conversation.id,
-      "dropped",
-      "Auto-closed on next DM: 1h since the person's last reply (or since open). Turns preserved for recall.",
-    );
-    return false;
-  }
-
   const replyTs = Number(event.ts) * 1000 || Date.now();
 
-  // Append the person's reply to the conversation
-  deps.store.appendTurn(conversation.id, {
-    sender: "person",
-    text: event.text,
-    ts: replyTs,
-  });
-
-  // Check for opt-out signal
+  // Opt-out ALWAYS wins, BEFORE the staleness check. A "stop asking me" that
+  // arrives more than an hour after JR's question must still be honored —
+  // otherwise the staleness drop below silently swallows the signal (routing
+  // the message to triage as a fresh task) and JR keeps pestering the person
+  // about a topic they've explicitly closed.
   const optOutResult = detectOptOut(event.text);
   if (optOutResult.matched) {
+    deps.store.appendTurn(conversation.id, { sender: "person", text: event.text, ts: replyTs });
     deps.db
       .prepare(
         `INSERT INTO opt_outs (person_user_id, scope, added_at, reason)
@@ -199,6 +184,30 @@ export async function handleConversationReply(
     await deps.postMessage(event.channel, "Got it — I'll stop. Sorry to bother you.");
     return true;
   }
+
+  // Inline staleness check — measure time since the PERSON's last reply.
+  // JR's follow-up turns don't reset the clock; only the human's responses do.
+  // If the person never replied, fall back to opened_at.
+  const baseline = lastPersonTurnTs(conversation.turns) ?? conversation.opened_at;
+  if (Date.now() - baseline > inlineStaleMs()) {
+    // Preserve the late reply on the (now closed) conversation for recall
+    // before dropping it, then let the caller route it to triage as a fresh
+    // task. Without the append, the human's words were lost entirely.
+    deps.store.appendTurn(conversation.id, { sender: "person", text: event.text, ts: replyTs });
+    deps.store.close(
+      conversation.id,
+      "dropped",
+      "Auto-closed on next DM: 1h since the person's last reply (or since open). Turns preserved for recall.",
+    );
+    return false;
+  }
+
+  // Append the person's reply to the conversation
+  deps.store.appendTurn(conversation.id, {
+    sender: "person",
+    text: event.text,
+    ts: replyTs,
+  });
 
   // Build current turns for LLM
   const updatedConversation = deps.store.findOpenForPerson(event.user);
