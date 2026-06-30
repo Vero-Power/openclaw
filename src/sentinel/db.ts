@@ -74,6 +74,17 @@ CREATE TABLE IF NOT EXISTS opt_outs (
 CREATE INDEX IF NOT EXISTS idx_opt_outs_person
   ON opt_outs(person_user_id);
 
+CREATE TABLE IF NOT EXISTS inquiry_topic_mutes (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  person_user_id  TEXT,
+  keyword         TEXT NOT NULL,
+  added_at        INTEGER NOT NULL,
+  reason          TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_inquiry_topic_mutes_person
+  ON inquiry_topic_mutes(person_user_id);
+
 CREATE TABLE IF NOT EXISTS opportunities (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   title           TEXT NOT NULL,
