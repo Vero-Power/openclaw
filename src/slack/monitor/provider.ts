@@ -452,7 +452,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       allowedSlackChannels: extractSentinelChannelIds(ctx.channelsConfig),
       triageDbPath: join(homedir(), ".openclaw/triage.db"),
       kalebUserId: "U07KRVD2867",
-      ridgeUserId: undefined, // TODO: fill from config when known
+      ridgeUserId: SLACK_USER_ALIASES.ridge, // Ridge Payne (U096S2FQTUZ)
       dmUser: dmUserFn,
       sentinelDbPath,
       spawnTask: (input) => spawnFollowupTask(input, ctx),
